@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 func testModel(mode previewMode, sessions []Session) model {
@@ -202,6 +204,109 @@ func TestColumnIcons(t *testing.T) {
 	if lipgloss.Width(m.iconCell("B", "main", colBranch, m.styles.branch, true)) !=
 		lipgloss.Width(m.iconCell("B", "", colBranch, m.styles.branch, true)) {
 		t.Errorf("icon cell width should match whether or not the value is empty")
+	}
+}
+
+func TestSelectionColorsKeepStyle(t *testing.T) {
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor) // force colour: test output isn't a TTY
+	defer lipgloss.SetColorProfile(prev)
+
+	var cfg Config
+	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Selection.Colors = true
+	m := newModel(cfg)
+	now := time.Now()
+	m.all = []Session{{ID: "r", Title: "busy", PID: 1, State: StateRunning, Modified: now, Activity: now}}
+	m.sessions = m.all
+	m.width, m.height = 160, 10
+
+	normal := m.renderRow(0, true, lipgloss.NewStyle(), false)                // unselected row
+	hi := m.renderRow(0, true, lipgloss.NewStyle().Background(m.selBG), true) // coloured cursor row
+
+	// The cursor row keeps colours (unlike reverse video, which drops them):
+	// it still carries ANSI styling and differs from the normal row only by
+	// the added background highlight.
+	if !strings.Contains(normal, "\x1b[") {
+		t.Fatalf("coloured row should carry ANSI styling, got %q", normal)
+	}
+	if hi == normal {
+		t.Errorf("highlighted row should differ from normal (background)")
+	}
+	if !strings.Contains(hi, "48;") { // a background-colour SGR introducer
+		t.Errorf("highlighted row should set a background, got %q", hi)
+	}
+}
+
+func TestReverseSelectionKeepsBold(t *testing.T) {
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(prev)
+
+	var cfg Config
+	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	m := newModel(cfg) // running style is bold; selected style is reverse
+	now := time.Now()
+	m.all = []Session{{ID: "r", Title: "busy", PID: 1, State: StateRunning, Modified: now, Activity: now}}
+	m.sessions = m.all
+	m.width, m.height = 120, 10
+
+	// The default reverse-video cursor row: colours dropped, but the running
+	// session's bold survives (bold and reverse are independent SGR attributes).
+	rev := m.renderRow(0, false, m.styles.selected, true)
+	if !strings.Contains(rev, "7") { // reverse attribute present
+		t.Errorf("reverse row should carry the reverse attribute, got %q", rev)
+	}
+	if !boldAndReverse(rev) {
+		t.Errorf("running session should stay bold under reverse video, got %q", rev)
+	}
+}
+
+// boldAndReverse reports whether the string contains an SGR sequence enabling
+// both bold (1) and reverse (7), in either order, e.g. "\x1b[1;7m".
+func boldAndReverse(s string) bool {
+	return strings.Contains(s, "1;7") || strings.Contains(s, "7;1")
+}
+
+func TestReverseStatusColor(t *testing.T) {
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(prev)
+
+	var cfg Config
+	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	sess := []Session{{ID: "i", Title: "idle", PID: 1, State: StateIdle, Modified: now, Activity: now}}
+	const cyan = "36" // [styles.idle] fg = "6" -> ANSI cyan
+
+	// Off: the idle marker is inverted with the rest of the reverse bar, no
+	// colour applied at all.
+	off := newModel(cfg)
+	off.all, off.sessions = sess, sess
+	off.width, off.height = 80, 8
+	if strings.Contains(off.renderRow(0, false, off.styles.selected, true), cyan) {
+		t.Errorf("without statuscolor the idle marker should be plain reverse, not coloured")
+	}
+
+	// On: the marker/word keep their colour *and* stay reversed, so they render
+	// as a coloured block matching the bar (reverse + cyan = "7;36") rather than
+	// a default-background hole. The rest of the row is plain reverse.
+	cfg.Selection.StatusColor = true
+	on := newModel(cfg)
+	on.all, on.sessions = sess, sess
+	on.width, on.height = 80, 8
+	out := on.renderRow(0, false, on.styles.selected, true)
+	if !strings.Contains(out, "7;"+cyan) {
+		t.Errorf("statuscolor should reverse *and* colour the idle marker, got %q", out)
+	}
+	if !strings.Contains(out, "\x1b[7m") {
+		t.Errorf("the rest of the row should still be plain reverse, got %q", out)
 	}
 }
 

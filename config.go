@@ -47,6 +47,10 @@ type Config struct {
 	Display struct {
 		Project string `toml:"project"` // "full" path or just the "name"
 	} `toml:"display"`
+	Selection struct {
+		Colors      bool `toml:"colors"`      // keep column/status colours on the cursor row
+		StatusColor bool `toml:"statuscolor"` // in reverse mode, keep the status marker/word coloured
+	} `toml:"selection"`
 	Status struct {
 		Running string `toml:"running"` // "spinner" animates; else a literal glyph
 		Waiting string `toml:"waiting"`
