@@ -502,28 +502,30 @@ func (m model) runCommand(tmpl string) (tea.Model, tea.Cmd) {
 		"id":    s.ID,
 		"pid":   strconv.Itoa(s.PID),
 		"pid?":  "",
-		"pane?": "",
+		"pane":  s.Pane, // seeded by the adapter's Live() (cwd match for pi); "" if none
+		"pane?": s.Pane,
 		"cwd":   s.CWD,
 		"file":  s.File,
 		"state": string(s.State),
 	}
 	if s.Live() {
 		vars["pid?"] = strconv.Itoa(s.PID)
-	}
-	if strings.Contains(tmpl, "{pane}") || strings.Contains(tmpl, "{pid}") {
-		if !s.Live() {
-			m.notice = "Session has no running claude process."
-			return m, nil
+		// For a live session whose adapter didn't already place it (e.g. Claude
+		// sets Pane in Live() too, but a fresh lookup handles a pane move since),
+		// walk the process tree to the hosting pane.
+		if vars["pane"] == "" {
+			if pane, ok := tmuxPaneFor(s.PID); ok {
+				vars["pane"], vars["pane?"] = pane, pane
+			}
 		}
 	}
-	if strings.Contains(tmpl, "{pane}") || strings.Contains(tmpl, "{pane?}") {
-		pane, ok := tmuxPaneFor(s.PID)
-		if ok {
-			vars["pane"], vars["pane?"] = pane, pane
-		} else if strings.Contains(tmpl, "{pane}") {
-			m.notice = "Session is not running in a tmux pane."
-			return m, nil
-		}
+	// {pid} needs a real process -- a PID of 0 is meaningless to substitute -- so
+	// a template using it requires a live session. {pane} is left empty when
+	// there's none (rather than hard-blocked), so a template can fall back (pi:
+	// jump to the pane, else resume in the current terminal) via `||`.
+	if strings.Contains(tmpl, "{pid}") && !s.Live() {
+		m.notice = "Session has no running agent process."
+		return m, nil
 	}
 	if strings.Contains(tmpl, "{ci-build-url}") {
 		u := m.ciBuildURL(s)

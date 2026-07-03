@@ -82,13 +82,26 @@ func (a *piAdapter) Sessions() ([]Session, error) {
 	return sessions, nil
 }
 
-// Live is a no-op for now: pi has no live-process registry, so without a marker
-// file from an extension there's no session-id -> PID/status mapping to attach.
-// (The process is a normal Linux process and visible to the host — the gap is the
-// missing registry, not process visibility.) Sessions show as offline; the
-// freshest still sorts to the top by activity/mtime. See ADAPTERS.md for the
-// cwd-pane match and extension-marker follow-ups.
-func (a *piAdapter) Live(sessions []Session) {}
+// Live attaches a best-effort tmux pane to pi sessions by matching the pane's
+// current working directory to the session's launch cwd. pi has no live-process
+// registry, so there's no PID or running/waiting/idle state to attach — sessions
+// stay "offline" for status purposes — but the pane match lets Enter jump to
+// the terminal running pi, and the tmux glyph marks which sessions are in a
+// pane. The pane's current path is a Linux path equal to the session cwd
+// regardless of where the pi process lives, so this works even when a
+// process-tree walk (used by Claude) wouldn't. See ADAPTERS.md for the
+// extension-marker follow-up that would add real live state.
+func (a *piAdapter) Live(sessions []Session) {
+	panes := tmuxPanesByCWD()
+	for i := range sessions {
+		if sessions[i].Source != "pi" {
+			continue
+		}
+		if pane, ok := tmuxPaneForCWD(sessions[i].CWD, panes); ok {
+			sessions[i].Pane = pane
+		}
+	}
+}
 
 // discoverPi lists every pi transcript under root. Each project's transcripts
 // live in a directory whose name encodes the cwd (path separators -> '-'); that

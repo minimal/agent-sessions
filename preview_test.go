@@ -558,3 +558,53 @@ func TestSpinnerFrameAdvances(t *testing.T) {
 		t.Error("anyRunning should be true with a running session")
 	}
 }
+
+func TestTmuxPaneForCWD(t *testing.T) {
+	panes := map[string]string{
+		"/home/chris/code/foo": "%5",
+		"/home/chris/code/bar": "%6",
+	}
+	if p, ok := tmuxPaneForCWD("/home/chris/code/foo", panes); !ok || p != "%5" {
+		t.Errorf("matching cwd: got %q ok=%v, want %%5", p, ok)
+	}
+	if _, ok := tmuxPaneForCWD("/nope", panes); ok {
+		t.Error("non-matching cwd should return ok=false")
+	}
+	if _, ok := tmuxPaneForCWD("", panes); ok {
+		t.Error("empty cwd should not match")
+	}
+}
+
+// TestEnterPaneWithoutLive checks the guard decoupling: a pi session that is
+// NOT live (no PID -- pi has no registry) but IS in a tmux pane (found by cwd
+// match) can still run a {pane}-based enter command. Previously {pane} hard-
+// required Live(), which blocked every pi session.
+func TestEnterPaneWithoutLive(t *testing.T) {
+	m := glyphModel()
+	// Pane set, PID 0 -> not Live, but InTmux. A {pane} template must still
+	// run (substituting the pane) rather than be hard-blocked for lacking a PID.
+	m.sessions = []Session{{ID: "x", Title: "s", CWD: "/p", Pane: "%9", Modified: time.Now()}}
+	m.cursor = 0
+
+	after, cmd := m.runCommand("tmux select-pane -t {pane}")
+	mm := after.(model)
+	if mm.notice != "" {
+		t.Errorf("non-live but in-tmux session should run, got notice %q", mm.notice)
+	}
+	if cmd == nil {
+		t.Error("expected a command to be issued for an in-tmux non-live session")
+	}
+}
+
+// TestEnterPidBlockedWithoutLive checks that {pid} still requires a live
+// session (a PID of 0 is meaningless to substitute), so pi sessions -- which
+// have no PID -- can't use a {pid} template.
+func TestEnterPidBlockedWithoutLive(t *testing.T) {
+	m := glyphModel()
+	m.sessions = []Session{{ID: "x", Title: "s", Pane: "%9", Modified: time.Now()}} // PID 0
+	m.cursor = 0
+	after, _ := m.runCommand("kill {pid}")
+	if after.(model).notice == "" {
+		t.Error("a {pid} template on a non-live session should be blocked with a notice")
+	}
+}

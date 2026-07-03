@@ -163,16 +163,28 @@ just wraps today's functions.
 
 ### `Live()` (best-effort — see phasing)
 
-Phase 1 ships a **no-op**: pi sessions show offline, but the freshest still
-sorts to the top via Activity/mtime, so the browser is fully useful for past
-sessions and the current one.
+**Shipped:** pane match only. `Live()` runs `tmux list-panes -a -F
+'#{pane_id} #{pane_current_path}'` and sets `Pane` on any pi session whose cwd
+equals a pane's current path (skipping agent-sessions' own `$TMUX_PANE` so a
+session sharing our cwd doesn't match our pane). No PID or running/waiting/idle
+state is attached — sessions stay "offline" for status — but the tmux glyph now
+marks which pi sessions are in a pane, and Enter jumps to that pane. The match
+is Linux-side and works because the pi process is a normal Linux process whose
+pane's `pane_current_path` equals the session's launch cwd; first pane wins on
+duplicate cwds. On a pane match Enter jumps to it; otherwise the default
+command falls back to resuming pi in the current terminal.
 
-Phase 2 (heuristic, optional, no extension): a session is "live" if its file
-mtime is within ~15s; `State = running` if within ~3s (actively streaming) else
-`idle`; `Pane = tmuxPaneForCWD(cwd)`. This is deliberately coarse and documented
-as approximate — there's no authoritative signal without a marker file. (The
-pane match is Linux-side and works because the pi process is a normal Linux
-process whose tmux pane's `pane_current_path` equals the session cwd.)
+The gotoSession guards were decoupled to enable this: `{pane}` is substituted
+empty when there's none (so a template can shell-fallback) rather than
+hard-blocked, while `{pid}` still requires a live session (a PID of 0 is
+meaningless). This is why pi's default command uses `{pane}`/`{cwd}`/`{id}` and
+never `{pid}`.
+
+Phase 2 (not yet done, optional, no extension): infer live *state* from file
+mtime recency — `State = running` if within ~3s (actively streaming) else
+`idle`, live if within ~15s. Deliberately coarse and documented as
+approximate; there's no authoritative signal without a marker file. The pane
+match above is already shipped; this would add the status word/spinner.
 
 Phase 3 (authoritative, needs a small pi extension): an extension subscribes to
 pi's `session_start`/`agent_start`/`agent_end`/`session_shutdown` hooks and

@@ -71,11 +71,12 @@ command (below) and lets `/pi` or `/claude` filter the list.
 - **pi** — `~/.pi/agent/sessions/<encoded-cwd>/*.jsonl` (or
   `$PI_CODING_AGENT_SESSION_DIR` / `[sources.pi] session_dir`). pi keeps no
   live-process registry, so without a marker-writing extension (a future phase,
-  see `ADAPTERS.md`) pi sessions show as offline for now — but the freshest
-  still sorts to the top by activity. The pi process itself is a normal Linux
-  process (here, a WSL pnpm install on nix node), so pane-finding by cwd match
-  and an extension-based live state are both feasible. Subject is the first
-  prompt (or a `pi --name` session); git branch is read from the repo.
+  see `ADAPTERS.md`) pi sessions show as offline for status — but the freshest
+  still sorts to the top by activity. The pi process is a normal Linux process
+  (here, a WSL pnpm install on nix node), so a session's tmux pane is found by
+  matching the pane's current path to the session cwd: the tmux glyph marks
+  which pi sessions are in a pane, and `Enter` jumps to that pane. Subject is
+  the first prompt (or a `pi --name` session); git branch is read from the repo.
 
 Enable/disable sources in config:
 
@@ -394,12 +395,20 @@ shell — a prompt containing a literal `"` is the one thing it can't carry.
 A `[sources.<name>] enter` setting overrides the `[commands]` `enter` binding
 for that source's sessions — useful because resume syntax differs (`claude
 --resume` vs `pi --session`). pi has no live PID (no per-process registry), so
-its command uses `{cwd}`/`{id}` rather than `{pid}`/`{pane}`:
+its command uses `{pane}` (found by matching the session cwd to a tmux pane's
+current path) plus `{cwd}`/`{id}`, not `{pid}`. With a pane, `Enter` jumps to
+pi's tmux pane; without one (or outside tmux) it falls back to resuming pi in
+the current terminal:
 
 ```toml
 [sources.pi]
-enter = "cd {cwd} && pi --session {id}"
+enter = "tmux select-pane -t {pane} && tmux select-window -t {pane} && tmux switch-client -t {pane} 2>/dev/null || (cd {cwd} && pi --session {id})"
 ```
+```
+
+`{pane}` is substituted empty when a session has no pane, so the template's
+`||` fallback runs rather than the command being blocked. (`{pid}`, by
+contrast, still requires a live session — a PID of 0 is meaningless.)
 
 By default the command **takes over the terminal** while it runs, so
 interactive commands work (`tmux attach`, an editor, `claude --resume`). That
