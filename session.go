@@ -41,11 +41,21 @@ type Session struct {
 	Slug     string
 	Title    string
 	LastMsg  string // most recent assistant text, collapsed to one line
-	Modified time.Time
+	Modified time.Time // transcript file mtime
+	Activity time.Time // timestamp of the last real entry; drives sort order
 	Size     int64
 	State    SessionState // empty unless Live
 	PID      int          // the running claude process; 0 unless Live
 	Pane     string       // tmux pane id hosting the process; "" if none
+}
+
+// When is the time shown for the session: its last real activity, falling
+// back to the file mtime for stubs that have no timestamped entries.
+func (s Session) When() time.Time {
+	if s.Activity.IsZero() {
+		return s.Modified
+	}
+	return s.Activity
 }
 
 // Live reports whether a running claude process is attached to the session.
@@ -97,6 +107,7 @@ func (s Session) Subject() string {
 // transcriptLine covers the JSONL fields we care about across entry types.
 type transcriptLine struct {
 	Type      string `json:"type"`
+	Timestamp string `json:"timestamp"`
 	AITitle   string `json:"aiTitle"`
 	CWD       string `json:"cwd"`
 	GitBranch string `json:"gitBranch"`
@@ -180,7 +191,14 @@ func (ld *loader) Load() ([]Session, error) {
 	}
 	ld.cache = fresh // also drops entries for deleted files
 
+	// Order by last real activity, newest first. Sessions with no timestamped
+	// entries (e.g. mode-only stubs) have a zero Activity and sink to the
+	// bottom; mtime only breaks ties among them.
 	sort.Slice(sessions, func(i, j int) bool {
+		a, b := sessions[i].Activity, sessions[j].Activity
+		if !a.Equal(b) {
+			return a.After(b)
+		}
 		return sessions[i].Modified.After(sessions[j].Modified)
 	})
 	markLive(sessions)
@@ -236,6 +254,15 @@ func absorb(s *Session, l transcriptLine) {
 	}
 	if txt := assistantText(l); txt != "" {
 		s.LastMsg = txt
+	}
+	// Track the newest entry that carries a timestamp. Mode/permission-mode
+	// records have none, so they never advance Activity — that keeps sessions
+	// ordered by real conversation activity rather than by file mtime, which a
+	// stray mode write bumps without anything actually happening.
+	if l.Timestamp != "" {
+		if t, err := time.Parse(time.RFC3339, l.Timestamp); err == nil && t.After(s.Activity) {
+			s.Activity = t
+		}
 	}
 }
 
