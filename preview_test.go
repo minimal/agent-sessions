@@ -122,3 +122,36 @@ func TestRealDataRenders(t *testing.T) {
 		t.Errorf("expected at least one preview line from real data")
 	}
 }
+
+func TestTmuxGlyph(t *testing.T) {
+	now := time.Now()
+	sessions := []Session{
+		{ID: "a", Title: "attached", LastMsg: "hi", Modified: now, PID: 100, Pane: "%27"},
+		{ID: "b", Title: "loose", LastMsg: "hi", Modified: now, PID: 200}, // live, no pane
+		{ID: "c", Title: "dead", LastMsg: "hi", Modified: now},            // not live
+	}
+	m := testModel(previewColumn, sessions) // column mode: one line per session
+	m.tmuxGlyph = "⊟"
+	out := m.View()
+	if !strings.Contains(out, "⊟") {
+		t.Errorf("attachable session should show the glyph, got:\n%s", out)
+	}
+	// A live-but-loose session and a dead one must not be marked.
+	if strings.Count(out, "⊟") != 1 {
+		t.Errorf("exactly one session should be marked, got %d:\n%s", strings.Count(out, "⊟"), out)
+	}
+	// Rows stay column-aligned: the blank slot is the glyph's display width.
+	if got := m.tmuxCell(sessions[1]); got != "   " { // "  " + one space
+		t.Errorf("loose session cell = %q, want three spaces", got)
+	}
+}
+
+func TestTmuxGlyphDisabled(t *testing.T) {
+	now := time.Now()
+	sessions := []Session{{ID: "a", Title: "x", Modified: now, PID: 100, Pane: "%1"}}
+	m := testModel(previewColumn, sessions)
+	m.tmuxGlyph = ""
+	if got := m.tmuxCell(sessions[0]); got != "" {
+		t.Errorf("disabled glyph should yield no slot, got %q", got)
+	}
+}

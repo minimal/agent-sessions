@@ -28,6 +28,11 @@ Sessions with a running `claude` process show a state:
 - `waiting` — blocked on the user, e.g. a permission prompt
 - `idle` — waiting for the next prompt
 
+Live sessions running inside a tmux pane — the ones the default `Enter`
+command can jump to — are marked with a `⊟` glyph, so you can tell at a
+glance which sessions are attachable without pressing `Enter`. The glyph is
+configurable (see `[tmux]` under Configuration).
+
 State comes from `~/.claude/sessions/<pid>.json`, a registry each running
 Claude Code instance maintains (status `busy`/`waiting`/`idle` plus the exact
 session id). Registry files left behind by crashed processes are ignored by
@@ -96,6 +101,13 @@ within = "20m"    # ...that were modified within this window (a Go duration)
 The selected session is always previewed. `recent`/`within` only apply in
 `row` mode; `column` mode shows every session's message inline (capping the
 subject to make room), and `off` hides it.
+
+The `[tmux]` section sets the marker shown on tmux-attachable sessions:
+
+```toml
+[tmux]
+glyph = "⊟"   # set to "" to hide the marker
+```
 
 `[commands]` binds keys to shell commands run on the selected session. Any
 Bubble Tea key name works — single characters, `enter`, or combos like

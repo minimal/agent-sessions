@@ -38,6 +38,9 @@ type Config struct {
 		Recent int    `toml:"recent"` // max recent sessions to always preview
 		Within string `toml:"within"` // recency window, a Go duration string
 	} `toml:"preview"`
+	Tmux struct {
+		Glyph string `toml:"glyph"` // marker on tmux-attachable sessions; "" hides it
+	} `toml:"tmux"`
 }
 
 // PreviewWithin parses the recency window, falling back to 20m if unset or

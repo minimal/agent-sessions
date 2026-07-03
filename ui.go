@@ -84,6 +84,7 @@ const (
 type model struct {
 	loader        *loader
 	styles        styles
+	tmuxGlyph     string      // marker for tmux-attachable sessions; "" hides it
 	previewMode   previewMode // how to show each session's last message
 	previewRecent int         // max recent sessions to always preview (row mode)
 	previewWithin time.Duration
@@ -118,6 +119,7 @@ func newModel(cfg Config) model {
 		loader:        newLoader(),
 		styles:        newStyles(cfg),
 		commands:      cfg.Commands,
+		tmuxGlyph:     cfg.Tmux.Glyph,
 		previewMode:   mode,
 		previewRecent: cfg.Preview.Recent,
 		previewWithin: cfg.PreviewWithin(),
@@ -724,9 +726,10 @@ func (m model) renderRow(idx int) string {
 			tail = "  " + s.LastMsg
 		}
 	}
-	line := fmt.Sprintf("%4d %-*s  %s  %s  %s  %s  %s%s",
+	line := fmt.Sprintf("%4d %-*s%s  %s  %s  %s  %s  %s%s",
 		idx+1,
 		colState, string(s.State),
+		m.tmuxCell(s),
 		s.Modified.Format("Jan 02 15:04"),
 		truncPad(s.Project(), colProject),
 		truncPad(s.Branch, colBranch),
@@ -735,6 +738,19 @@ func (m model) renderRow(idx int) string {
 		tail,
 	)
 	return trunc(line, m.width)
+}
+
+// tmuxCell is the fixed-width tmux marker slot, holding the glyph for
+// attachable sessions and blank otherwise, so columns stay aligned. It is
+// empty (no slot at all) when the marker is disabled.
+func (m model) tmuxCell(s Session) string {
+	if m.tmuxGlyph == "" {
+		return ""
+	}
+	if s.InTmux() {
+		return "  " + m.tmuxGlyph
+	}
+	return "  " + strings.Repeat(" ", lipgloss.Width(m.tmuxGlyph))
 }
 
 // previewLine is the indented detail line shown beneath a session in "row"

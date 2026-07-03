@@ -34,6 +34,11 @@ mode = "row"
 recent = 5      # in row mode, always preview this many recent sessions...
 within = "20m"  # ...modified within this window (a Go duration)
 
+[tmux]
+# Marker shown next to live sessions running inside a tmux pane, i.e. the
+# ones the default Enter command can jump to. Set to "" to hide it.
+glyph = "⊟"
+
 [commands]
 # Shell commands bound to keys, run on the selected session. Keys are
 # Bubble Tea key names: single characters ("o", "D"), "enter", or combos

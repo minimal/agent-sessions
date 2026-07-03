@@ -53,6 +53,12 @@ func (s Session) Live() bool {
 	return s.PID != 0
 }
 
+// InTmux reports whether the session's process sits in a tmux pane, i.e. the
+// default Enter command can jump to it without attaching a new terminal.
+func (s Session) InTmux() bool {
+	return s.Pane != ""
+}
+
 // Project returns a short display name for the session's working directory.
 func (s Session) Project() string {
 	if s.CWD == "" {
