@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func testModel(mode previewMode, sessions []Session) model {
@@ -152,6 +154,54 @@ func TestRealDataRenders(t *testing.T) {
 	out := m.View()
 	if !strings.Contains(out, "↳ ") {
 		t.Errorf("expected at least one preview line from real data")
+	}
+}
+
+func TestDirNameOnly(t *testing.T) {
+	now := time.Now()
+	s := Session{ID: "a", Title: "x", CWD: "/tmp/outer/inner", Modified: now}
+	m := testModel(previewColumn, []Session{s})
+
+	full := m.View()
+	if !strings.Contains(full, "/tmp/outer/inner") {
+		t.Fatalf("full path expected by default, got:\n%s", full)
+	}
+
+	m.dirNameOnly = true
+	name := m.View()
+	if strings.Contains(name, "outer") {
+		t.Errorf("dir-name mode should not show parent segments, got:\n%s", name)
+	}
+	if !strings.Contains(name, "inner") {
+		t.Errorf("dir-name mode should show the final segment, got:\n%s", name)
+	}
+}
+
+func TestColumnIcons(t *testing.T) {
+	now := time.Now()
+	sessions := []Session{
+		{ID: "a", Title: "x", CWD: "/tmp/proj", Branch: "main", Modified: now},
+		{ID: "b", Title: "y", CWD: "/tmp/proj", Modified: now}, // no branch
+	}
+	m := testModel(previewColumn, sessions)
+	m.dirIcon = "D"
+	m.branchIcon = "B"
+	out := m.View()
+
+	if !strings.Contains(out, "D /tmp/proj") {
+		t.Errorf("dir icon should precede the path, got:\n%s", out)
+	}
+	if !strings.Contains(out, "B main") {
+		t.Errorf("branch icon should precede the branch, got:\n%s", out)
+	}
+	// The icon slot is still reserved when the value is empty (alignment),
+	// but the icon itself is not drawn for the branchless session.
+	if got := m.iconCell("B", "", colBranch, m.styles.branch, true); strings.Contains(got, "B") {
+		t.Errorf("empty branch should not draw its icon, got %q", got)
+	}
+	if lipgloss.Width(m.iconCell("B", "main", colBranch, m.styles.branch, true)) !=
+		lipgloss.Width(m.iconCell("B", "", colBranch, m.styles.branch, true)) {
+		t.Errorf("icon cell width should match whether or not the value is empty")
 	}
 }
 

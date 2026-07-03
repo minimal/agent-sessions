@@ -4,6 +4,11 @@
 #   fg, bg                 colour: an ANSI/256 number ("0"-"255") or hex ("#rrggbb")
 #   bold, faint, reverse   boolean attributes
 # Omitted keys keep their defaults.
+#
+# The column defaults below use ANSI base colours ("1"-"15"), which resolve
+# through your terminal's palette — so a theme like Catppuccin colours the app
+# to match. Use "#rrggbb" hex instead to pin exact colours regardless of theme.
+# A Catppuccin Mocha example is at the bottom of this file.
 
 [styles.running]   # sessions whose turn is in progress
 fg = "10"
@@ -45,6 +50,33 @@ token = ""
 
 [styles.preview]  # the last-message text shown per session
 faint = true
+
+[styles.index]     # the leading row number
+fg = "8"
+
+[styles.time]      # the last-activity timestamp
+fg = "8"
+
+[styles.project]   # the directory column
+fg = "4"
+
+[styles.branch]    # the git branch column
+fg = "5"
+
+[styles.subject]   # the session title column (left unset = default text colour)
+
+[icons]
+# Glyphs shown before the directory and branch columns. Defaults are Nerd Font
+# icons (need a Nerd Font in your terminal); set either to "" to hide it, or a
+# plain char / emoji instead, e.g. dir = "📁".
+dir    = ""   # nf-fa-folder
+branch = ""   # nf-pl-branch
+
+[display]
+# "full" shows the whole path (e.g. ~/code/scratch/agent-sessions); "name"
+# shows just the final segment (agent-sessions). Search still matches the
+# full path either way.
+project = "full"
 
 [status]
 # Marker shown at the start of each row for its status. Defaults are Nerd
@@ -120,3 +152,19 @@ c = '''
 p=$(tmux new-window -P -F "#{pane_id}" -c {project-picker})
 tmux send-keys -t "$p" "claude {text-input:Prompt}" Enter
 '''
+
+# --- Catppuccin Mocha example -------------------------------------------------
+# The ANSI-base defaults above already follow your terminal theme. To pin exact
+# Catppuccin Mocha colours regardless of terminal palette, replace the style
+# sections with hex, e.g.:
+#
+#   [styles.running]  fg = "#a6e3a1"  bold = true   # green
+#   [styles.waiting]  fg = "#f9e2af"  bold = true   # yellow
+#   [styles.idle]     fg = "#89dceb"                # sky
+#   [styles.unread]   fg = "#fab387"  bold = true   # peach
+#   [styles.index]    fg = "#6c7086"                # overlay0
+#   [styles.time]     fg = "#6c7086"                # overlay0
+#   [styles.project]  fg = "#89b4fa"                # blue
+#   [styles.branch]   fg = "#cba6f7"                # mauve
+#   [styles.subject]  fg = "#cdd6f4"                # text
+#   [styles.preview]  fg = "#9399b2"                # overlay2

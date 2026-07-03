@@ -57,6 +57,11 @@ type styles struct {
 	preview  lipgloss.Style
 	unread   lipgloss.Style
 	offline  lipgloss.Style
+	index    lipgloss.Style
+	time     lipgloss.Style
+	project  lipgloss.Style
+	branch   lipgloss.Style
+	subject  lipgloss.Style
 	state    map[SessionState]lipgloss.Style
 }
 
@@ -68,6 +73,11 @@ func newStyles(cfg Config) styles {
 		preview:  cfg.Styles.Preview.style(),
 		unread:   cfg.Styles.Unread.style(),
 		offline:  cfg.Styles.Offline.style(),
+		index:    cfg.Styles.Index.style(),
+		time:     cfg.Styles.Time.style(),
+		project:  cfg.Styles.Project.style(),
+		branch:   cfg.Styles.Branch.style(),
+		subject:  cfg.Styles.Subject.style(),
 		state: map[SessionState]lipgloss.Style{
 			StateRunning: cfg.Styles.Running.style(),
 			StateWaiting: cfg.Styles.Waiting.style(),
@@ -113,6 +123,9 @@ type model struct {
 	glyphs        map[marker]string
 	colGlyph      int         // display width reserved for the status glyph
 	showWords     bool        // show the state word next to the glyph
+	dirIcon       string      // glyph before the project column; "" hides it
+	branchIcon    string      // glyph before the branch column; "" hides it
+	dirNameOnly   bool        // show just the directory name, not the full path
 	previewMode   previewMode // how to show each session's last message
 	previewRecent int         // max recent sessions to always preview (row mode)
 	previewWithin time.Duration
@@ -166,6 +179,9 @@ func newModel(cfg Config) model {
 		glyphs:        glyphs,
 		colGlyph:      glyphWidth(glyphs),
 		showWords:     cfg.Status.Words,
+		dirIcon:       cfg.Icons.Dir,
+		branchIcon:    cfg.Icons.Branch,
+		dirNameOnly:   cfg.Display.Project == "name",
 		previewMode:   mode,
 		previewRecent: cfg.Preview.Recent,
 		previewWithin: cfg.PreviewWithin(),
@@ -936,6 +952,15 @@ func (m model) renderRow(idx int, plain bool) string {
 	if m.ciToken != "" {
 		ciCell = truncPad(m.ciStatus(s), colCI) + "  "
 	}
+	// paint applies a column style unless the whole row is styled elsewhere
+	// (selected/stale rows use plain text so their wrapping style wins).
+	paint := func(st lipgloss.Style, txt string) string {
+		if plain {
+			return txt
+		}
+		return st.Render(txt)
+	}
+
 	mk := m.markerFor(s)
 	glyph := m.statusCell(mk)
 	if !plain {
@@ -951,27 +976,50 @@ func (m model) renderRow(idx int, plain bool) string {
 		}
 		word = " " + w
 	}
+
+	project := s.Project()
+	if m.dirNameOnly {
+		project = s.Dir()
+	}
 	subject, tail := s.Subject(), ""
 	if m.previewMode == previewColumn {
 		subject = truncPad(subject, colSubject)
 		if s.LastMsg != "" {
-			tail = "  " + s.LastMsg
+			tail = "  " + paint(m.styles.preview, s.LastMsg)
 		}
 	}
-	line := fmt.Sprintf("%4d %s%s%s  %s  %s  %s  %s  %s%s%s",
-		idx+1,
+	line := fmt.Sprintf("%s %s%s%s  %s  %s  %s  %s  %s%s%s",
+		paint(m.styles.index, fmt.Sprintf("%4d", idx+1)),
 		glyph,
 		word,
 		m.tmuxCell(s),
-		s.When().Format("Jan 02 15:04"),
-		truncPad(s.Project(), colProject),
-		truncPad(s.Branch, colBranch),
+		paint(m.styles.time, s.When().Format("Jan 02 15:04")),
+		m.iconCell(m.dirIcon, project, colProject, m.styles.project, plain),
+		m.iconCell(m.branchIcon, s.Branch, colBranch, m.styles.branch, plain),
 		truncPad(s.Pane, colPane),
 		ciCell,
-		subject,
+		paint(m.styles.subject, subject),
 		tail,
 	)
 	return trunc(line, m.width)
+}
+
+// iconCell renders a fixed-width column optionally prefixed with an icon. The
+// icon slot is reserved on every row (blank when the value is empty) so the
+// columns stay aligned; the whole cell takes the column's style unless plain.
+func (m model) iconCell(icon, text string, w int, st lipgloss.Style, plain bool) string {
+	body := truncPad(text, w)
+	if icon != "" {
+		if strings.TrimSpace(text) == "" {
+			body = strings.Repeat(" ", lipgloss.Width(icon)+1) + body
+		} else {
+			body = icon + " " + body
+		}
+	}
+	if plain {
+		return body
+	}
+	return st.Render(body)
 }
 
 // markerFor is the status a session's leading glyph should convey.

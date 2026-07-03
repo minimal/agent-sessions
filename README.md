@@ -97,14 +97,38 @@ default file — [`config.default.toml`](config.default.toml), embedded in
 the binary at build time — is written there. Omitted keys keep their
 defaults.
 
-Each UI element — `running`, `waiting`, `idle`, `unread`, `offline`,
-`dimmed`, `bar`, `selected`, `preview` — is a `[styles.*]` section accepting
-`fg`/`bg` (ANSI/256 number or `#rrggbb` hex) and `bold`/`faint`/`reverse`
-booleans:
+Each UI element is a `[styles.*]` section accepting `fg`/`bg` (ANSI/256
+number or `#rrggbb` hex) and `bold`/`faint`/`reverse` booleans. Status
+elements: `running`, `waiting`, `idle`, `unread`, `offline`, `dimmed`. Chrome:
+`bar`, `selected`, `preview`. Columns: `index`, `time`, `project`, `branch`,
+`subject`.
 
 ```toml
 [styles.running]
 fg = "#af87ff"
+```
+
+The column defaults use ANSI base colours (`"1"`–`"15"`), which resolve
+through your terminal's palette — so a theme like **Catppuccin** colours the
+app to match, rather than the app pinning fixed colours that ignore it. Use
+`#rrggbb` hex to pin exact colours regardless of theme; the shipped default
+config includes a commented Catppuccin Mocha block to copy from.
+
+The `[icons]` section sets Nerd Font glyphs shown before the directory and
+branch columns (set either to `""` to hide it, or use a plain char / emoji):
+
+```toml
+[icons]
+dir    = ""   # nf-fa-folder
+branch = ""   # nf-pl-branch
+```
+
+The `[display]` section chooses how the directory column is shown — the full
+path or just its final segment. Search still matches the full path either way:
+
+```toml
+[display]
+project = "full"   # or "name" for just the directory name
 ```
 
 `[circleci]` enables a CI column showing the latest CircleCI status of each

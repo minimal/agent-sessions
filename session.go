@@ -40,7 +40,7 @@ type Session struct {
 	Branch   string
 	Slug     string
 	Title    string
-	LastMsg  string // most recent assistant text, collapsed to one line
+	LastMsg  string    // most recent assistant text, collapsed to one line
 	Modified time.Time // transcript file mtime
 	Activity time.Time // timestamp of the last real entry; drives sort order
 	Size     int64
@@ -94,6 +94,16 @@ func (s Session) Delete() error {
 		return err
 	}
 	return os.RemoveAll(strings.TrimSuffix(s.File, ".jsonl"))
+}
+
+// Dir is the working directory's final path segment, e.g. "agent-sessions"
+// for "~/code/scratch/agent-sessions". Used when the project column is
+// configured to show just the name rather than the full path.
+func (s Session) Dir() string {
+	if s.CWD == "" {
+		return "?"
+	}
+	return filepath.Base(s.CWD)
 }
 
 // matches reports whether the lowercase query appears in any of the
