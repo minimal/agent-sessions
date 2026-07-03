@@ -176,7 +176,10 @@ highlight** instead of reverse. The highlight colour comes from
 plain reverse bar but still want the status to read at a glance, keep `colors
 = false` and set `statuscolor = true`: on the cursor row the status marker and
 the running/idle/waiting word keep their own colour (so the spinner stays
-coloured and animated) while the rest of the row stays reverse.
+coloured and animated) while the rest of the row stays reverse. Either way, pressing
+`Enter` hides the highlight until the next keystroke or until the window
+regains focus, so the row you were reading isn't masked while you look at the
+session you opened.
 
 The `[tmux]` section sets the marker shown on tmux-attachable sessions:
 
@@ -190,6 +193,16 @@ Bubble Tea key name works — single characters, `enter`, or combos like
 `"ctrl+x"` (quoted). The command gets the terminal while it runs, so
 interactive commands work. Bindings take precedence over built-in keys;
 set one to `""` to unbind it. `?` shows the active bindings.
+
+By default a command **takes over the terminal** while it runs, so
+interactive ones (an editor, `claude --resume`) work — but this briefly drops
+the alt-screen, so the app appears to close and reopen. Set the top-level
+`background = true` to run every command **detached** instead, without
+touching the terminal (no flash). That suits the default bindings, which only
+orchestrate tmux, but breaks any command that needs the terminal for input or
+output. Pressing a command key also hides the cursor highlight until the next
+keystroke or when the window regains focus, so the row you were reading isn't
+masked while you look at the session you opened.
 
 ### Command placeholders
 

@@ -119,6 +119,7 @@ const (
 type model struct {
 	loader         *loader
 	styles         styles
+	bgExec         bool   // run key-bound commands detached (no terminal takeover)
 	tmuxGlyph      string // marker for tmux-attachable sessions; "" hides it
 	glyphs         map[marker]string
 	colGlyph       int                    // display width reserved for the status glyph
@@ -129,6 +130,7 @@ type model struct {
 	selColors      bool                   // keep colours on the cursor row
 	selStatusColor bool                   // keep status marker/word coloured in reverse mode
 	selBG          lipgloss.TerminalColor // highlight bg for the cursor row; nil = none
+	cursorHidden   bool                   // hide the cursor highlight until the next key/focus
 	previewMode    previewMode            // how to show each session's last message
 	previewRecent  int                    // max recent sessions to always preview (row mode)
 	previewWithin  time.Duration
@@ -182,6 +184,7 @@ func newModel(cfg Config) model {
 		loader:         newLoader(),
 		styles:         newStyles(cfg),
 		commands:       cfg.Commands,
+		bgExec:         cfg.Background,
 		tmuxGlyph:      cfg.Tmux.Glyph,
 		glyphs:         glyphs,
 		colGlyph:       glyphWidth(glyphs),
@@ -331,8 +334,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = true
 		return m, m.loadCmd
 
+	case tea.FocusMsg:
+		m.cursorHidden = false // regaining focus brings the cursor back
+
 	case tea.KeyMsg:
 		m.notice = ""
+		m.cursorHidden = false // any key brings the cursor back
 		if m.deleting != nil {
 			s := *m.deleting
 			m.deleting = nil
@@ -478,12 +485,20 @@ func (m model) continueCommand(tmpl string, vars map[string]string) (tea.Model, 
 		m.input = newLineInput()
 		return m, nil
 	}
-	return m, execCmd(tmpl, vars)
+	m.cursorHidden = true // hide the highlight until the next key or focus
+	return m, execCmd(tmpl, vars, m.bgExec)
 }
 
-// execCmd runs an expanded command template with the terminal attached.
-func execCmd(tmpl string, vars map[string]string) tea.Cmd {
+// execCmd runs an expanded command template. With bg it runs detached — no
+// alt-screen handoff (which flashes the app closed) and no output to corrupt
+// the display, suiting commands that only orchestrate tmux; otherwise the
+// command takes over the terminal so interactive ones (an editor,
+// claude --resume) work.
+func execCmd(tmpl string, vars map[string]string, bg bool) tea.Cmd {
 	cmd := exec.Command("sh", "-c", expandCommand(tmpl, vars))
+	if bg {
+		return func() tea.Msg { return execDoneMsg{cmd.Run()} }
+	}
 	return tea.ExecProcess(cmd, func(err error) tea.Msg { return execDoneMsg{err} })
 }
 
@@ -778,9 +793,9 @@ func (m model) View() string {
 			switch {
 			case r.detail:
 				line = m.styles.preview.Render(m.previewLine(s))
-			case r.si == m.cursor && m.selColors:
+			case r.si == m.cursor && !m.cursorHidden && m.selColors:
 				line = m.renderRow(r.si, true, lipgloss.NewStyle().Background(m.selBG), true)
-			case r.si == m.cursor:
+			case r.si == m.cursor && !m.cursorHidden:
 				line = m.renderRow(r.si, false, m.styles.selected, true)
 			case !s.Live() && time.Since(s.Activity) > dimAfter:
 				line = m.renderRow(r.si, false, m.styles.dim, false)

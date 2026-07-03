@@ -67,6 +67,7 @@ type Config struct {
 	Tmux struct {
 		Glyph string `toml:"glyph"` // marker on tmux-attachable sessions; "" hides it
 	} `toml:"tmux"`
+	Background bool `toml:"background"` // run key-bound commands detached (no terminal takeover)
 }
 
 // PreviewWithin parses the recency window, falling back to 20m if unset or

@@ -10,6 +10,15 @@
 # to match. Use "#rrggbb" hex instead to pin exact colours regardless of theme.
 # A Catppuccin Mocha example is at the bottom of this file.
 
+# false (default): a key-bound command (see [commands]) takes over the terminal
+# while it runs, so interactive commands work (an editor, claude --resume). This
+# briefly exits the alt-screen, so the app appears to close and reopen. true:
+# run commands detached, without touching the terminal — no flash — which suits
+# the default bindings (they only orchestrate tmux: switch a client, open a
+# window, send keys) but breaks any command that needs the terminal for input
+# or output. Applies to every key-bound command.
+background = false
+
 [styles.running]   # sessions whose turn is in progress
 fg = "10"
 bold = true
