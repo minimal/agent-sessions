@@ -21,6 +21,11 @@ const defaultConfigTOML = `# agent-sessions configuration.
 #   fg, bg                 colour: an ANSI/256 number ("0"-"255") or hex ("#rrggbb")
 #   bold, faint, reverse   boolean attributes
 # Omitted keys keep their defaults.
+#
+# The column defaults below use ANSI base colours ("1"-"15"), which resolve
+# through your terminal's palette — so a theme like Catppuccin colours the app
+# to match. Use "#rrggbb" hex instead to pin exact colours regardless of theme.
+# A Catppuccin Mocha example is at the bottom of this file.
 
 [styles.running]   # sessions whose turn is in progress
 fg = "10"
@@ -51,6 +56,33 @@ reverse = true
 
 [styles.preview]   # the last-message text shown per session
 faint = true
+
+[styles.index]     # the leading row number
+fg = "8"
+
+[styles.time]      # the last-activity timestamp
+fg = "8"
+
+[styles.project]   # the directory column
+fg = "4"
+
+[styles.branch]    # the git branch column
+fg = "5"
+
+[styles.subject]   # the session title column (left unset = default text colour)
+
+[icons]
+# Glyphs shown before the directory and branch columns. Defaults are Nerd Font
+# icons (need a Nerd Font in your terminal); set either to "" to hide it, or a
+# plain char / emoji instead, e.g. dir = "📁".
+dir    = ""   # nf-fa-folder
+branch = ""   # nf-pl-branch
+
+[display]
+# "full" shows the whole path (e.g. ~/code/scratch/agent-sessions); "name"
+# shows just the final segment (agent-sessions). Search still matches the
+# full path either way.
+project = "full"
 
 [status]
 # Marker shown at the start of each row for its status. Defaults are Nerd
@@ -91,6 +123,22 @@ glyph = "⊟"
 # switch-client moves the client when run inside tmux, attach-session
 # takes over the terminal when run outside it.
 enter = "tmux select-pane -t {pane} && tmux select-window -t {pane} && tmux switch-client -t {pane} 2>/dev/null || tmux attach-session -t {pane}"
+
+# --- Catppuccin Mocha example -------------------------------------------------
+# The ANSI-base defaults above already follow your terminal theme. To pin exact
+# Catppuccin Mocha colours regardless of terminal palette, replace the style
+# sections with hex, e.g.:
+#
+#   [styles.running]  fg = "#a6e3a1"  bold = true   # green
+#   [styles.waiting]  fg = "#f9e2af"  bold = true   # yellow
+#   [styles.idle]     fg = "#89dceb"                # sky
+#   [styles.unread]   fg = "#fab387"  bold = true   # peach
+#   [styles.index]    fg = "#6c7086"                # overlay0
+#   [styles.time]     fg = "#6c7086"                # overlay0
+#   [styles.project]  fg = "#89b4fa"                # blue
+#   [styles.branch]   fg = "#cba6f7"                # mauve
+#   [styles.subject]  fg = "#cdd6f4"                # text
+#   [styles.preview]  fg = "#9399b2"                # overlay2
 `
 
 // Config is the user-tunable configuration.
@@ -105,7 +153,19 @@ type Config struct {
 		Bar      StyleConfig `toml:"bar"`
 		Selected StyleConfig `toml:"selected"`
 		Preview  StyleConfig `toml:"preview"`
+		Index    StyleConfig `toml:"index"`   // the leading row number
+		Time     StyleConfig `toml:"time"`    // the last-activity timestamp
+		Project  StyleConfig `toml:"project"` // the directory column
+		Branch   StyleConfig `toml:"branch"`  // the git branch column
+		Subject  StyleConfig `toml:"subject"` // the session title column
 	} `toml:"styles"`
+	Icons struct {
+		Branch string `toml:"branch"` // shown before the branch; "" hides it
+		Dir    string `toml:"dir"`    // shown before the directory; "" hides it
+	} `toml:"icons"`
+	Display struct {
+		Project string `toml:"project"` // "full" path or just the "name"
+	} `toml:"display"`
 	Status struct {
 		Running string `toml:"running"` // "spinner" animates; else a literal glyph
 		Waiting string `toml:"waiting"`

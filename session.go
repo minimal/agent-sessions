@@ -82,6 +82,16 @@ func (s Session) Project() string {
 	return s.CWD
 }
 
+// Dir is the working directory's final path segment, e.g. "agent-sessions"
+// for "~/code/scratch/agent-sessions". Used when the project column is
+// configured to show just the name rather than the full path.
+func (s Session) Dir() string {
+	if s.CWD == "" {
+		return "?"
+	}
+	return filepath.Base(s.CWD)
+}
+
 // matches reports whether the lowercase query appears in any of the
 // session's searchable fields.
 func (s Session) matches(q string) bool {
