@@ -164,7 +164,17 @@ highlight** instead of reverse. The highlight colour comes from
 plain reverse bar but still want the status to read at a glance, keep `colors
 = false` and set `statuscolor = true`: on the cursor row the status marker and
 the running/idle/waiting word keep their own colour (so the spinner stays
-coloured and animated) while the rest of the row stays reverse. Either way, pressing
+coloured and animated) while the rest of the row stays reverse. Those colours
+are tuned for the dark rows, so on the pale reversed bar they can look a touch
+light; override them just for that row with `[selection.statuscolors]` (unset =
+the normal colour — on a light terminal theme, where the reversed bar is dark,
+you might pick brighter values instead):
+
+```toml
+[selection.statuscolors]
+running = "2"     # darker green
+unread  = "166"   # darker orange
+``` Either way, pressing
 `Enter` hides the highlight until the next keystroke or until the window
 regains focus, so the row you were reading isn't masked while you look at the
 session you opened.

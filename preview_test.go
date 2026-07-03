@@ -284,30 +284,44 @@ func TestReverseStatusColor(t *testing.T) {
 	}
 	now := time.Now()
 	sess := []Session{{ID: "i", Title: "idle", PID: 1, State: StateIdle, Modified: now, Activity: now}}
-	const cyan = "36" // [styles.idle] fg = "6" -> ANSI cyan
+	const cyanBg = "46" // [styles.idle] fg = "6" put on the bg channel -> ANSI bg cyan
 
 	// Off: the idle marker is inverted with the rest of the reverse bar, no
 	// colour applied at all.
 	off := newModel(cfg)
 	off.all, off.sessions = sess, sess
 	off.width, off.height = 80, 8
-	if strings.Contains(off.renderRow(0, false, off.styles.selected, true), cyan) {
+	if strings.Contains(off.renderRow(0, false, off.styles.selected, true), cyanBg) {
 		t.Errorf("without statuscolor the idle marker should be plain reverse, not coloured")
 	}
 
-	// On: the marker/word keep their colour *and* stay reversed, so they render
-	// as a coloured block matching the bar (reverse + cyan = "7;36") rather than
-	// a default-background hole. The rest of the row is plain reverse.
+	// On: the status colour goes on the background channel with reverse, so the
+	// terminal's swap renders it as coloured *text* on the bar's own background
+	// ("7;46") — same background as the rest of the row, which stays plain
+	// reverse.
 	cfg.Selection.StatusColor = true
 	on := newModel(cfg)
 	on.all, on.sessions = sess, sess
 	on.width, on.height = 80, 8
 	out := on.renderRow(0, false, on.styles.selected, true)
-	if !strings.Contains(out, "7;"+cyan) {
-		t.Errorf("statuscolor should reverse *and* colour the idle marker, got %q", out)
+	if !strings.Contains(out, "7;"+cyanBg) {
+		t.Errorf("statuscolor should render the idle marker as reversed bg colour, got %q", out)
 	}
 	if !strings.Contains(out, "\x1b[7m") {
 		t.Errorf("the rest of the row should still be plain reverse, got %q", out)
+	}
+
+	// An override replaces the idle colour just for the reversed row.
+	cfg.Selection.StatusColors.Idle = "4" // blue -> reversed bg "44"
+	ov := newModel(cfg)
+	ov.all, ov.sessions = sess, sess
+	ov.width, ov.height = 80, 8
+	out = ov.renderRow(0, false, ov.styles.selected, true)
+	if strings.Contains(out, "7;"+cyanBg) {
+		t.Errorf("override should replace the default idle colour, got %q", out)
+	}
+	if !strings.Contains(out, "7;44") {
+		t.Errorf("override should apply the configured colour (blue bg 44), got %q", out)
 	}
 }
 

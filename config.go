@@ -100,6 +100,16 @@ colors = false
 # marker and the running/idle/waiting word in their own colour (so the spinner
 # and state word stay coloured on the cursor row) while the rest stays reverse.
 statuscolor = false
+# The status text on the reversed row uses each status's normal colour. Those
+# are tuned for the dark rows, so on the pale reversed bar they can look a touch
+# light; override them here with colours picked for that background (unset = use
+# the normal colour). On a light terminal theme the reversed bar is dark, so you
+# might instead want brighter values here.
+# [selection.statuscolors]
+# running = "2"     # darker green
+# waiting = "3"
+# idle    = "4"
+# unread  = "166"   # darker orange
 
 [status]
 # Marker shown at the start of each row for its status. Defaults are Nerd
@@ -191,8 +201,14 @@ type Config struct {
 		Project string `toml:"project"` // "full" path or just the "name"
 	} `toml:"display"`
 	Selection struct {
-		Colors      bool `toml:"colors"`      // keep column/status colours on the cursor row
-		StatusColor bool `toml:"statuscolor"` // in reverse mode, keep the status marker/word coloured
+		Colors       bool     `toml:"colors"`      // keep column/status colours on the cursor row
+		StatusColor  bool     `toml:"statuscolor"` // in reverse mode, keep the status marker/word coloured
+		StatusColors struct { // override those colours just for the reversed row
+			Running string `toml:"running"`
+			Waiting string `toml:"waiting"`
+			Idle    string `toml:"idle"`
+			Unread  string `toml:"unread"`
+		} `toml:"statuscolors"`
 	} `toml:"selection"`
 	Status struct {
 		Running string `toml:"running"` // "spinner" animates; else a literal glyph
