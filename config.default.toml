@@ -24,6 +24,16 @@ reverse = true
 [styles.selected]  # the cursor row
 reverse = true
 
+[styles.preview]  # the last-message text shown per session
+faint = true
+
+[preview]
+# How to show each session's last assistant message. mode is "row" (a
+# detail line beneath the session), "column" (an inline column), or "off".
+mode = "row"
+recent = 5      # in row mode, always preview this many recent sessions...
+within = "20m"  # ...modified within this window (a Go duration)
+
 [commands]
 # Shell commands bound to keys, run on the selected session. Keys are
 # Bubble Tea key names: single characters ("o", "D"), "enter", or combos

@@ -49,4 +49,3 @@ func tmuxPaneFor(pid int) (string, bool) {
 	info, ok := paneFor(tmuxPanes(), pid)
 	return info.ID, ok
 }
-

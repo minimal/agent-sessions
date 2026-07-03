@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/charmbracelet/lipgloss"
@@ -29,8 +30,23 @@ type Config struct {
 		Dimmed   StyleConfig `toml:"dimmed"`
 		Bar      StyleConfig `toml:"bar"`
 		Selected StyleConfig `toml:"selected"`
+		Preview  StyleConfig `toml:"preview"`
 	} `toml:"styles"`
 	Commands map[string]string `toml:"commands"`
+	Preview  struct {
+		Mode   string `toml:"mode"`   // "row", "column", or "off"
+		Recent int    `toml:"recent"` // max recent sessions to always preview
+		Within string `toml:"within"` // recency window, a Go duration string
+	} `toml:"preview"`
+}
+
+// PreviewWithin parses the recency window, falling back to 20m if unset or
+// malformed so a bad config still shows recent previews rather than none.
+func (c Config) PreviewWithin() time.Duration {
+	if d, err := time.ParseDuration(c.Preview.Within); err == nil {
+		return d
+	}
+	return 20 * time.Minute
 }
 
 // StyleConfig describes one visual element of the UI.

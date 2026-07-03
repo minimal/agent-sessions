@@ -16,6 +16,12 @@ live sessions found in one), and a subject line (the session's AI-generated
 title, falling back to the first typed prompt). The list auto-refreshes
 every 2 seconds.
 
+Each session's last assistant message — the thing Claude last said, e.g. the
+`Done!` ending a turn — is shown too. By default it appears as an indented
+detail line beneath the session, for the selected session and for the most
+recently active ones, so recent answers stay on screen. See `[preview]` under
+Configuration to change this to an inline column or turn it off.
+
 Sessions with a running `claude` process show a state:
 
 - `running` — Claude's turn is in progress
@@ -69,14 +75,27 @@ default file — [`config.default.toml`](config.default.toml), embedded in
 the binary at build time — is written there. Omitted keys keep their
 defaults.
 
-Each UI element — `running`, `waiting`, `idle`, `dimmed`, `bar`, `selected`
-— is a `[styles.*]` section accepting `fg`/`bg` (ANSI/256 number or
+Each UI element — `running`, `waiting`, `idle`, `dimmed`, `bar`, `selected`,
+`preview` — is a `[styles.*]` section accepting `fg`/`bg` (ANSI/256 number or
 `#rrggbb` hex) and `bold`/`faint`/`reverse` booleans:
 
 ```toml
 [styles.running]
 fg = "#af87ff"
 ```
+
+The `[preview]` section controls the last-message display:
+
+```toml
+[preview]
+mode = "row"      # "row" (detail line beneath), "column" (inline), or "off"
+recent = 5        # in row mode, always preview this many recent sessions...
+within = "20m"    # ...that were modified within this window (a Go duration)
+```
+
+The selected session is always previewed. `recent`/`within` only apply in
+`row` mode; `column` mode shows every session's message inline (capping the
+subject to make room), and `off` hides it.
 
 `[commands]` binds keys to shell commands run on the selected session. Any
 Bubble Tea key name works — single characters, `enter`, or combos like

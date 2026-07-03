@@ -40,6 +40,7 @@ type Session struct {
 	Branch   string
 	Slug     string
 	Title    string
+	LastMsg  string // most recent assistant text, collapsed to one line
 	Modified time.Time
 	Size     int64
 	State    SessionState // empty unless Live
@@ -241,6 +242,23 @@ func absorb(s *Session, l transcriptLine) {
 	if l.Slug != "" {
 		s.Slug = l.Slug
 	}
+	if txt := assistantText(l); txt != "" {
+		s.LastMsg = txt
+	}
+}
+
+// assistantText returns the collapsed text of an assistant message, or "".
+// Tool-call preambles and pure tool-use turns yield no text and are skipped,
+// so LastMsg tracks the last thing Claude actually said.
+func assistantText(l transcriptLine) string {
+	if l.Type != "assistant" || l.Message == nil || l.Message.Role != "assistant" {
+		return ""
+	}
+	text := strings.TrimSpace(contentText(l.Message.Content))
+	if text == "" {
+		return ""
+	}
+	return strings.Join(strings.Fields(text), " ")
 }
 
 // contentText returns the first text found in a message content value,
