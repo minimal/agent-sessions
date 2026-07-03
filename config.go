@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/charmbracelet/lipgloss"
@@ -40,6 +41,20 @@ reverse = true
 [styles.selected]  # the cursor row
 reverse = true
 
+[styles.preview]   # the last-message text shown per session
+faint = true
+
+[preview]
+# Show each session's last assistant message (e.g. the "Done!" ending a
+# turn). mode is "row" (a detail line beneath the session), "column" (an
+# extra column on the session's own row), or "off".
+mode = "row"
+# The selected session is always previewed. In "row" mode the most recent
+# sessions are too, so recent answers stay on screen without moving the
+# cursor: up to "recent" sessions modified within "within" (a Go duration).
+recent = 5
+within = "20m"
+
 [commands]
 # Shell command run when pressing Enter on a session. {id}, {pid}, {cwd},
 # {file} and {pane} expand to shell-quoted values; {pane} is the tmux pane
@@ -59,10 +74,25 @@ type Config struct {
 		Dimmed   StyleConfig `toml:"dimmed"`
 		Bar      StyleConfig `toml:"bar"`
 		Selected StyleConfig `toml:"selected"`
+		Preview  StyleConfig `toml:"preview"`
 	} `toml:"styles"`
+	Preview struct {
+		Mode   string `toml:"mode"`   // "row", "column", or "off"
+		Recent int    `toml:"recent"` // max recent sessions to always preview
+		Within string `toml:"within"` // recency window, a Go duration string
+	} `toml:"preview"`
 	Commands struct {
 		Enter string `toml:"enter"`
 	} `toml:"commands"`
+}
+
+// PreviewWithin parses the recency window, falling back to 20m if unset or
+// malformed so a bad config still shows recent previews rather than none.
+func (c Config) PreviewWithin() time.Duration {
+	if d, err := time.ParseDuration(c.Preview.Within); err == nil {
+		return d
+	}
+	return 20 * time.Minute
 }
 
 // StyleConfig describes one visual element of the UI.

@@ -30,4 +30,3 @@ func tmuxPaneFor(pid int) (string, bool) {
 	}
 	return "", false
 }
-

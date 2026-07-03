@@ -17,10 +17,13 @@ const refreshEvery = 2 * time.Second
 // Sessions with no live process and no activity for this long are dimmed.
 const dimAfter = 24 * time.Hour
 
-// Index column widths; the subject column takes the remaining width.
+// Index column widths. The last column takes the remaining width: the
+// subject, unless preview "column" mode caps it (colSubject) to make room
+// for the last message.
 const (
 	colProject = 28
 	colBranch  = 24
+	colSubject = 30
 )
 
 // colState fits every state word the index can show.
@@ -37,6 +40,7 @@ type styles struct {
 	bar      lipgloss.Style
 	selected lipgloss.Style
 	dim      lipgloss.Style
+	preview  lipgloss.Style
 	state    map[SessionState]lipgloss.Style
 }
 
@@ -45,6 +49,7 @@ func newStyles(cfg Config) styles {
 		bar:      cfg.Styles.Bar.style(),
 		selected: cfg.Styles.Selected.style(),
 		dim:      cfg.Styles.Dimmed.style(),
+		preview:  cfg.Styles.Preview.style(),
 		state: map[SessionState]lipgloss.Style{
 			StateRunning: cfg.Styles.Running.style(),
 			StateWaiting: cfg.Styles.Waiting.style(),
@@ -53,29 +58,50 @@ func newStyles(cfg Config) styles {
 	}
 }
 
+// previewMode selects how a session's last message is shown.
+type previewMode string
+
+const (
+	previewRow    previewMode = "row"    // a detail line beneath the session
+	previewColumn previewMode = "column" // an extra column on the session row
+	previewOff    previewMode = "off"    // don't show it
+)
+
 type model struct {
-	loader    *loader
-	styles    styles
-	enterCmd  string    // command template bound to Enter
-	all       []Session // every session, unfiltered
-	sessions  []Session // what the index shows: all, limited by query
-	query     string
-	searching bool // the search prompt is open and capturing keys
-	cursor    int
-	offset    int
-	width     int
-	height    int
-	loading   bool // a Load is in flight; don't start another
-	status    string
-	notice    string // shown instead of status until the next keypress
+	loader        *loader
+	styles        styles
+	enterCmd      string      // command template bound to Enter
+	previewMode   previewMode // how to show each session's last message
+	previewRecent int         // max recent sessions to always preview (row mode)
+	previewWithin time.Duration
+	all           []Session // every session, unfiltered
+	sessions      []Session // what the index shows: all, limited by query
+	query         string
+	searching     bool // the search prompt is open and capturing keys
+	cursor        int
+	offset        int
+	width         int
+	height        int
+	loading       bool // a Load is in flight; don't start another
+	status        string
+	notice        string // shown instead of status until the next keypress
 }
 
 func newModel(cfg Config) model {
+	mode := previewMode(cfg.Preview.Mode)
+	switch mode {
+	case previewRow, previewColumn, previewOff:
+	default:
+		mode = previewRow
+	}
 	return model{
-		loader:   newLoader(),
-		styles:   newStyles(cfg),
-		enterCmd: cfg.Commands.Enter,
-		loading:  true,
+		loader:        newLoader(),
+		styles:        newStyles(cfg),
+		enterCmd:      cfg.Commands.Enter,
+		previewMode:   mode,
+		previewRecent: cfg.Preview.Recent,
+		previewWithin: cfg.PreviewWithin(),
+		loading:       true,
 	}
 }
 
@@ -289,12 +315,68 @@ func (m *model) pageSize() int {
 	return max(1, m.height-2)
 }
 
-func (m *model) clampOffset() {
-	if m.cursor < m.offset {
-		m.offset = m.cursor
+// dispRow is one rendered line: a session's main row, or its preview detail.
+type dispRow struct {
+	si     int
+	detail bool
+}
+
+// layout expands the session list into display lines, inserting a preview
+// detail line after each session that should show one.
+func (m model) layout() []dispRow {
+	rows := make([]dispRow, 0, len(m.sessions))
+	for i := range m.sessions {
+		rows = append(rows, dispRow{si: i})
+		if m.showPreviewRow(i) {
+			rows = append(rows, dispRow{si: i, detail: true})
+		}
 	}
-	if m.cursor >= m.offset+m.pageSize() {
-		m.offset = m.cursor - m.pageSize() + 1
+	return rows
+}
+
+// showPreviewRow reports whether session i gets a preview detail line. Only
+// "row" mode uses detail lines; the selected session always shows one, and
+// the most recently active sessions show one so recent answers stay visible.
+func (m model) showPreviewRow(i int) bool {
+	if m.previewMode != previewRow || m.sessions[i].LastMsg == "" {
+		return false
+	}
+	if i == m.cursor {
+		return true
+	}
+	return i < m.previewRecent && time.Since(m.sessions[i].Modified) <= m.previewWithin
+}
+
+// cursorLine is the display-line index of the selected session's main row.
+func (m model) cursorLine(rows []dispRow) int {
+	for i, r := range rows {
+		if r.si == m.cursor && !r.detail {
+			return i
+		}
+	}
+	return 0
+}
+
+func (m *model) clampOffset() {
+	rows := m.layout()
+	cl := m.cursorLine(rows)
+	page := m.pageSize()
+	if cl < m.offset {
+		m.offset = cl
+	}
+	// Keep the cursor's own preview line on screen too, when it has one.
+	end := cl
+	if cl+1 < len(rows) && rows[cl+1].detail && rows[cl+1].si == m.cursor {
+		end = cl + 1
+	}
+	if end >= m.offset+page {
+		m.offset = end - page + 1
+	}
+	if maxOff := max(0, len(rows)-page); m.offset > maxOff {
+		m.offset = maxOff
+	}
+	if m.offset < 0 {
+		m.offset = 0
 	}
 }
 
@@ -307,21 +389,28 @@ func (m model) View() string {
 	b.WriteString(m.styles.bar.Render(pad("q:Quit  j:Down  k:Up  Enter:Switch  /:Search  Esc:Clear  g/G:Top/Bottom  r:Refresh", m.width)))
 	b.WriteString("\n")
 
+	rows := m.layout()
 	page := m.pageSize()
 	for i := 0; i < page; i++ {
 		idx := m.offset + i
-		if idx < len(m.sessions) {
-			s := m.sessions[idx]
-			line := m.renderRow(idx)
+		if idx < len(rows) {
+			r := rows[idx]
+			s := m.sessions[r.si]
+			var line string
 			switch {
-			case idx == m.cursor:
-				line = m.styles.selected.Render(pad(line, m.width))
+			case r.detail:
+				line = m.styles.preview.Render(m.previewLine(s))
+			case r.si == m.cursor:
+				line = m.styles.selected.Render(pad(m.renderRow(r.si), m.width))
 			case s.Live():
+				line = m.renderRow(r.si)
 				if style, ok := m.styles.state[s.State]; ok {
 					line = style.Render(line)
 				}
 			case time.Since(s.Modified) > dimAfter:
-				line = m.styles.dim.Render(line)
+				line = m.styles.dim.Render(m.renderRow(r.si))
+			default:
+				line = m.renderRow(r.si)
 			}
 			b.WriteString(line)
 		}
@@ -345,15 +434,29 @@ func (m model) View() string {
 
 func (m model) renderRow(idx int) string {
 	s := m.sessions[idx]
-	line := fmt.Sprintf("%4d %-*s  %s  %s  %s  %s",
+	subject, tail := s.Subject(), ""
+	if m.previewMode == previewColumn {
+		subject = truncPad(subject, colSubject)
+		if s.LastMsg != "" {
+			tail = "  " + s.LastMsg
+		}
+	}
+	line := fmt.Sprintf("%4d %-*s  %s  %s  %s  %s%s",
 		idx+1,
 		colState, string(s.State),
 		s.Modified.Format("Jan 02 15:04"),
 		truncPad(s.Project(), colProject),
 		truncPad(s.Branch, colBranch),
-		s.Subject(),
+		subject,
+		tail,
 	)
 	return trunc(line, m.width)
+}
+
+// previewLine is the indented detail line shown beneath a session in "row"
+// mode, carrying its last assistant message.
+func (m model) previewLine(s Session) string {
+	return trunc("     ↳ "+s.LastMsg, m.width)
 }
 
 // pad and trunc both measure display cells (not runes or bytes), so wide
