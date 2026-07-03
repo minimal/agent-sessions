@@ -53,6 +53,10 @@ reverse = true
 
 [styles.selected]  # the cursor row
 reverse = true
+# With [selection] colors = true, reverse is ignored and this section's bg
+# (below, commented) is used as the highlight instead, keeping each column's
+# own colour. A dim default is used if no bg is set.
+# bg = "236"
 
 [styles.preview]   # the last-message text shown per session
 faint = true
@@ -83,6 +87,19 @@ branch = ""   # nf-pl-branch
 # shows just the final segment (agent-sessions). Search still matches the
 # full path either way.
 project = "full"
+
+[selection]
+# false (default) draws the cursor row in clean, mutt-style reverse video,
+# which drops the row's colours. true keeps each column's colour and the
+# running/waiting bold, drawing a background highlight instead (colour from
+# [styles.selected] bg, or a dim default). Pressing Enter hides the highlight
+# until the next keystroke or when the window regains focus, so the row you
+# were reading isn't masked while you look at the session you opened.
+colors = false
+# With colors = false (reverse video), statuscolor = true keeps just the status
+# marker and the running/idle/waiting word in their own colour (so the spinner
+# and state word stay coloured on the cursor row) while the rest stays reverse.
+statuscolor = false
 
 [status]
 # Marker shown at the start of each row for its status. Defaults are Nerd
@@ -166,6 +183,10 @@ type Config struct {
 	Display struct {
 		Project string `toml:"project"` // "full" path or just the "name"
 	} `toml:"display"`
+	Selection struct {
+		Colors      bool `toml:"colors"`      // keep column/status colours on the cursor row
+		StatusColor bool `toml:"statuscolor"` // in reverse mode, keep the status marker/word coloured
+	} `toml:"selection"`
 	Status struct {
 		Running string `toml:"running"` // "spinner" animates; else a literal glyph
 		Waiting string `toml:"waiting"`
