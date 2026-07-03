@@ -174,6 +174,25 @@ The selected session is always previewed. `recent`/`within` only apply in
 `row` mode; `column` mode shows every session's message inline (capping the
 subject to make room), and `off` hides it.
 
+The `[selection]` section controls how the cursor row is drawn:
+
+```toml
+[selection]
+colors = false        # true keeps column/status colours; false = reverse video
+statuscolor = false   # in reverse mode, keep just the status marker/word coloured
+```
+
+By default the cursor row is clean, mutt-style **reverse video**. Reverse maps
+the whole row to two colours, so per-column colours can't show — but the
+running/waiting **bold is kept** (bold and reverse are independent). Set
+`colors = true` to keep each column's colour too, drawing a **background
+highlight** instead of reverse. The highlight colour comes from
+`[styles.selected]` `bg` (a dim default is used if unset). If you like the
+plain reverse bar but still want the status to read at a glance, keep `colors
+= false` and set `statuscolor = true`: on the cursor row the status marker and
+the running/idle/waiting word keep their own colour (so the spinner stays
+coloured and animated) while the rest of the row stays reverse.
+
 The `[tmux]` section sets the marker shown on tmux-attachable sessions:
 
 ```toml

@@ -117,44 +117,47 @@ const (
 )
 
 type model struct {
-	loader        *loader
-	styles        styles
-	tmuxGlyph     string // marker for tmux-attachable sessions; "" hides it
-	glyphs        map[marker]string
-	colGlyph      int         // display width reserved for the status glyph
-	showWords     bool        // show the state word next to the glyph
-	dirIcon       string      // glyph before the project column; "" hides it
-	branchIcon    string      // glyph before the branch column; "" hides it
-	dirNameOnly   bool        // show just the directory name, not the full path
-	previewMode   previewMode // how to show each session's last message
-	previewRecent int         // max recent sessions to always preview (row mode)
-	previewWithin time.Duration
-	commands      map[string]string // key name -> command template
-	ciToken       string            // "" disables the CI column
-	ciSlugs       map[string]string // cwd -> CircleCI project slug ("" = none)
-	ci            map[string]ciEntry
-	ciPending     map[string]time.Time // slug@branch (or cwd@branch) in flight
-	all           []Session            // every session, unfiltered
-	sessions      []Session            // what the index shows: all, limited by query/project
-	query         string
-	project       string                  // limit the index to this project cwd; "" is no limit
-	input         textinput.Model         // line editor backing the search and text prompts
-	searching     bool                    // the search prompt is open and capturing keys
-	unread        map[string]bool         // session IDs that finished a turn unseen
-	seen          map[string]SessionState // last observed live state, for transitions
-	spin          int                     // running-spinner frame index
-	spinning      bool                    // a spinner tick is scheduled
-	showHelp      bool
-	deleting      *Session // awaiting y/n confirmation to delete
-	picker        pickerState
-	prompt        promptState
-	cursor        int
-	offset        int
-	width         int
-	height        int
-	loading       bool // a Load is in flight; don't start another
-	status        string
-	notice        string // shown instead of status until the next keypress
+	loader         *loader
+	styles         styles
+	tmuxGlyph      string // marker for tmux-attachable sessions; "" hides it
+	glyphs         map[marker]string
+	colGlyph       int                    // display width reserved for the status glyph
+	showWords      bool                   // show the state word next to the glyph
+	dirIcon        string                 // glyph before the project column; "" hides it
+	branchIcon     string                 // glyph before the branch column; "" hides it
+	dirNameOnly    bool                   // show just the directory name, not the full path
+	selColors      bool                   // keep colours on the cursor row
+	selStatusColor bool                   // keep status marker/word coloured in reverse mode
+	selBG          lipgloss.TerminalColor // highlight bg for the cursor row; nil = none
+	previewMode    previewMode            // how to show each session's last message
+	previewRecent  int                    // max recent sessions to always preview (row mode)
+	previewWithin  time.Duration
+	commands       map[string]string // key name -> command template
+	ciToken        string            // "" disables the CI column
+	ciSlugs        map[string]string // cwd -> CircleCI project slug ("" = none)
+	ci             map[string]ciEntry
+	ciPending      map[string]time.Time // slug@branch (or cwd@branch) in flight
+	all            []Session            // every session, unfiltered
+	sessions       []Session            // what the index shows: all, limited by query/project
+	query          string
+	project        string                  // limit the index to this project cwd; "" is no limit
+	input          textinput.Model         // line editor backing the search and text prompts
+	searching      bool                    // the search prompt is open and capturing keys
+	unread         map[string]bool         // session IDs that finished a turn unseen
+	seen           map[string]SessionState // last observed live state, for transitions
+	spin           int                     // running-spinner frame index
+	spinning       bool                    // a spinner tick is scheduled
+	showHelp       bool
+	deleting       *Session // awaiting y/n confirmation to delete
+	picker         pickerState
+	prompt         promptState
+	cursor         int
+	offset         int
+	width          int
+	height         int
+	loading        bool // a Load is in flight; don't start another
+	status         string
+	notice         string // shown instead of status until the next keypress
 }
 
 func newModel(cfg Config) model {
@@ -171,27 +174,38 @@ func newModel(cfg Config) model {
 		markerUnread:  cfg.Status.Unread,
 		markerOffline: cfg.Status.Offline,
 	}
+	var selBG lipgloss.TerminalColor
+	if cfg.Selection.Colors {
+		if cfg.Styles.Selected.Bg != "" {
+			selBG = lipgloss.Color(cfg.Styles.Selected.Bg)
+		} else {
+			selBG = lipgloss.Color("236") // a dim default when none is configured
+		}
+	}
 	return model{
-		loader:        newLoader(),
-		styles:        newStyles(cfg),
-		commands:      cfg.Commands,
-		tmuxGlyph:     cfg.Tmux.Glyph,
-		glyphs:        glyphs,
-		colGlyph:      glyphWidth(glyphs),
-		showWords:     cfg.Status.Words,
-		dirIcon:       cfg.Icons.Dir,
-		branchIcon:    cfg.Icons.Branch,
-		dirNameOnly:   cfg.Display.Project == "name",
-		previewMode:   mode,
-		previewRecent: cfg.Preview.Recent,
-		previewWithin: cfg.PreviewWithin(),
-		ciToken:       cfg.ciToken(),
-		ciSlugs:       cfg.ciOverrides(),
-		ci:            map[string]ciEntry{},
-		ciPending:     map[string]time.Time{},
-		unread:        map[string]bool{},
-		seen:          map[string]SessionState{},
-		loading:       true,
+		loader:         newLoader(),
+		styles:         newStyles(cfg),
+		commands:       cfg.Commands,
+		tmuxGlyph:      cfg.Tmux.Glyph,
+		glyphs:         glyphs,
+		colGlyph:       glyphWidth(glyphs),
+		showWords:      cfg.Status.Words,
+		dirIcon:        cfg.Icons.Dir,
+		branchIcon:     cfg.Icons.Branch,
+		dirNameOnly:    cfg.Display.Project == "name",
+		selColors:      cfg.Selection.Colors,
+		selStatusColor: cfg.Selection.StatusColor,
+		selBG:          selBG,
+		previewMode:    mode,
+		previewRecent:  cfg.Preview.Recent,
+		previewWithin:  cfg.PreviewWithin(),
+		ciToken:        cfg.ciToken(),
+		ciSlugs:        cfg.ciOverrides(),
+		ci:             map[string]ciEntry{},
+		ciPending:      map[string]time.Time{},
+		unread:         map[string]bool{},
+		seen:           map[string]SessionState{},
+		loading:        true,
 	}
 }
 
@@ -828,12 +842,14 @@ func (m model) View() string {
 			switch {
 			case r.detail:
 				line = m.styles.preview.Render(m.previewLine(s))
+			case r.si == m.cursor && m.selColors:
+				line = m.renderRow(r.si, true, lipgloss.NewStyle().Background(m.selBG), true)
 			case r.si == m.cursor:
-				line = m.styles.selected.Render(pad(m.renderRow(r.si, true), m.width))
+				line = m.renderRow(r.si, false, m.styles.selected, true)
 			case !s.Live() && time.Since(s.Activity) > dimAfter:
-				line = m.styles.dim.Render(m.renderRow(r.si, true))
+				line = m.renderRow(r.si, false, m.styles.dim, false)
 			default:
-				line = m.renderRow(r.si, false)
+				line = m.renderRow(r.si, true, lipgloss.NewStyle(), false)
 			}
 			b.WriteString(line)
 		}
@@ -942,72 +958,119 @@ func (m model) helpView() string {
 	return b.String()
 }
 
-// renderRow builds one session line. When plain is false the leading status
-// glyph and the state word are colour-styled; plain is used for the selected
-// and stale rows, whose whole line gets a single wrapping style instead (so
-// inner colour codes don't fight the reverse/faint).
-func (m model) renderRow(idx int, plain bool) string {
+// renderRow builds one session line. When colored, each cell keeps its own
+// colour; otherwise it keeps only its bold, so emphasis (a running session)
+// survives even in the uncoloured reverse/dim rows. sel is the row overlay —
+// the reverse video, background highlight, or faint applied to the cursor and
+// stale rows — layered onto every cell, separator and the trailing pad so it
+// covers the whole row. fill pads the row to full width (for the bar-like
+// reverse and highlight rows). Bold and reverse are independent attributes, so
+// bold text stays bold under reverse video.
+func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) string {
 	s := m.sessions[idx]
-	ciCell := ""
-	if m.ciToken != "" {
-		ciCell = truncPad(m.ciStatus(s), colCI) + "  "
-	}
-	// paint applies a column style unless the whole row is styled elsewhere
-	// (selected/stale rows use plain text so their wrapping style wins).
-	paint := func(st lipgloss.Style, txt string) string {
-		if plain {
-			return txt
+	seg := func(st lipgloss.Style, txt string) string {
+		r := lipgloss.NewStyle().Bold(st.GetBold())
+		if colored {
+			r = st
 		}
-		return st.Render(txt)
+		r = overlay(r, sel)
+		return r.Render(txt)
 	}
+	// statusSeg is seg for the marker and state word. In a reverse row with
+	// statuscolor on, it keeps the cell's colour and still reverses, so the
+	// status shows as a coloured block that matches the bar (rather than the
+	// colour dropping out, or punching a default-background hole in the bar).
+	statusSeg := func(st lipgloss.Style, txt string) string {
+		if m.selStatusColor && sel.GetReverse() && !isNoColor(st.GetForeground()) {
+			return overlay(st, sel).Render(txt)
+		}
+		return seg(st, txt)
+	}
+	gap := func(n int) string { return seg(lipgloss.NewStyle(), strings.Repeat(" ", n)) }
 
 	mk := m.markerFor(s)
-	glyph := m.statusCell(mk)
-	if !plain {
-		glyph = m.styleFor(mk).Render(glyph)
-	}
-	word := ""
+	var b strings.Builder
+	b.WriteString(seg(m.styles.index, fmt.Sprintf("%4d", idx+1)))
+	b.WriteString(gap(1))
+	b.WriteString(statusSeg(m.styleFor(mk), m.statusCell(mk)))
 	if m.showWords {
-		w := fmt.Sprintf("%-*s", colState, string(s.State))
-		if !plain {
-			if st, ok := m.styles.state[s.State]; ok && s.Live() {
-				w = st.Render(w)
-			}
+		w := " " + fmt.Sprintf("%-*s", colState, string(s.State))
+		st := lipgloss.NewStyle()
+		if ws, ok := m.styles.state[s.State]; ok && s.Live() {
+			st = ws
 		}
-		word = " " + w
+		b.WriteString(statusSeg(st, w))
 	}
+	b.WriteString(seg(lipgloss.NewStyle(), m.tmuxCell(s)))
+	b.WriteString(gap(2))
+	b.WriteString(seg(m.styles.time, s.When().Format("Jan 02 15:04")))
+	b.WriteString(gap(2))
 
 	project := s.Project()
 	if m.dirNameOnly {
 		project = s.Dir()
 	}
-	subject, tail := s.Subject(), ""
+	b.WriteString(seg(m.styles.project, iconBody(m.dirIcon, project, colProject)))
+	b.WriteString(gap(2))
+	b.WriteString(seg(m.styles.branch, iconBody(m.branchIcon, s.Branch, colBranch)))
+	b.WriteString(gap(2))
+	b.WriteString(seg(lipgloss.NewStyle(), truncPad(s.Pane, colPane)))
+	b.WriteString(gap(2))
+
+	if m.ciToken != "" {
+		b.WriteString(seg(lipgloss.NewStyle(), truncPad(m.ciStatus(s), colCI)))
+		b.WriteString(gap(2))
+	}
+
+	subject := s.Subject()
 	if m.previewMode == previewColumn {
 		subject = truncPad(subject, colSubject)
-		if s.LastMsg != "" {
-			tail = "  " + paint(m.styles.preview, s.LastMsg)
+	}
+	b.WriteString(seg(m.styles.subject, subject))
+	if m.previewMode == previewColumn && s.LastMsg != "" {
+		b.WriteString(gap(2))
+		b.WriteString(seg(m.styles.preview, s.LastMsg))
+	}
+
+	line := b.String()
+	if fill { // extend the overlay across the rest of the row
+		if d := m.width - lipgloss.Width(line); d > 0 {
+			line += gap(d)
 		}
 	}
-	line := fmt.Sprintf("%s %s%s%s  %s  %s  %s  %s  %s%s%s",
-		paint(m.styles.index, fmt.Sprintf("%4d", idx+1)),
-		glyph,
-		word,
-		m.tmuxCell(s),
-		paint(m.styles.time, s.When().Format("Jan 02 15:04")),
-		m.iconCell(m.dirIcon, project, colProject, m.styles.project, plain),
-		m.iconCell(m.branchIcon, s.Branch, colBranch, m.styles.branch, plain),
-		truncPad(s.Pane, colPane),
-		ciCell,
-		paint(m.styles.subject, subject),
-		tail,
-	)
 	return trunc(line, m.width)
 }
 
-// iconCell renders a fixed-width column optionally prefixed with an icon. The
+// overlay layers the set attributes of ov onto base (ov wins), used to apply a
+// row's selection/dim style to every cell without discarding the cell's own.
+func overlay(base, ov lipgloss.Style) lipgloss.Style {
+	if ov.GetBold() {
+		base = base.Bold(true)
+	}
+	if ov.GetFaint() {
+		base = base.Faint(true)
+	}
+	if ov.GetReverse() {
+		base = base.Reverse(true)
+	}
+	if c := ov.GetForeground(); !isNoColor(c) {
+		base = base.Foreground(c)
+	}
+	if c := ov.GetBackground(); !isNoColor(c) {
+		base = base.Background(c)
+	}
+	return base
+}
+
+func isNoColor(c lipgloss.TerminalColor) bool {
+	_, ok := c.(lipgloss.NoColor)
+	return ok
+}
+
+// iconBody is a fixed-width column value optionally prefixed with an icon. The
 // icon slot is reserved on every row (blank when the value is empty) so the
-// columns stay aligned; the whole cell takes the column's style unless plain.
-func (m model) iconCell(icon, text string, w int, st lipgloss.Style, plain bool) string {
+// columns stay aligned regardless of whether the icon is drawn.
+func iconBody(icon, text string, w int) string {
 	body := truncPad(text, w)
 	if icon != "" {
 		if strings.TrimSpace(text) == "" {
@@ -1016,6 +1079,13 @@ func (m model) iconCell(icon, text string, w int, st lipgloss.Style, plain bool)
 			body = icon + " " + body
 		}
 	}
+	return body
+}
+
+// iconCell renders an iconBody with a column style unless plain. Kept as a
+// thin wrapper for callers that want a finished cell.
+func (m model) iconCell(icon, text string, w int, st lipgloss.Style, plain bool) string {
+	body := iconBody(icon, text, w)
 	if plain {
 		return body
 	}
