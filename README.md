@@ -112,6 +112,7 @@ waiting = "●"          # "🟡"
 idle    = "·"          # "⚪"
 unread  = "●"          # "🟠" — shown in the [styles.unread] colour
 offline = " "          # non-live sessions
+words   = true         # set false for a compact, icon-only column
 ```
 
 The `[preview]` section controls the last-message display:

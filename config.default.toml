@@ -46,6 +46,9 @@ waiting = ""
 idle    = ""
 unread  = ""
 offline = " "
+# Show the state word (running/waiting/idle) next to the glyph. Set false for
+# a compact, icon-only column.
+words = true
 
 [preview]
 # How to show each session's last assistant message. mode is "row" (a

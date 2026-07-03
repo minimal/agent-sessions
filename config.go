@@ -41,6 +41,7 @@ type Config struct {
 		Idle    string `toml:"idle"`
 		Unread  string `toml:"unread"`
 		Offline string `toml:"offline"`
+		Words   bool   `toml:"words"` // show the state word next to the glyph
 	} `toml:"status"`
 	Preview struct {
 		Mode   string `toml:"mode"`   // "row", "column", or "off"
