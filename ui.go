@@ -122,17 +122,18 @@ type model struct {
 	bgExec         bool   // run key-bound commands detached (no terminal takeover)
 	tmuxGlyph      string // marker for tmux-attachable sessions; "" hides it
 	glyphs         map[marker]string
-	colGlyph       int                    // display width reserved for the status glyph
-	showWords      bool                   // show the state word next to the glyph
-	dirIcon        string                 // glyph before the project column; "" hides it
-	branchIcon     string                 // glyph before the branch column; "" hides it
-	dirNameOnly    bool                   // show just the directory name, not the full path
-	selColors      bool                   // keep colours on the cursor row
-	selStatusColor bool                   // keep status marker/word coloured in reverse mode
-	selBG          lipgloss.TerminalColor // highlight bg for the cursor row; nil = none
-	cursorHidden   bool                   // hide the cursor highlight until the next key/focus
-	previewMode    previewMode            // how to show each session's last message
-	previewRecent  int                    // max recent sessions to always preview (row mode)
+	colGlyph       int                               // display width reserved for the status glyph
+	showWords      bool                              // show the state word next to the glyph
+	dirIcon        string                            // glyph before the project column; "" hides it
+	branchIcon     string                            // glyph before the branch column; "" hides it
+	dirNameOnly    bool                              // show just the directory name, not the full path
+	selColors      bool                              // keep colours on the cursor row
+	selStatusColor bool                              // keep status marker/word coloured in reverse mode
+	selStatusFg    map[marker]lipgloss.TerminalColor // per-status text-colour overrides for the reversed row
+	selBG          lipgloss.TerminalColor            // highlight bg for the cursor row; nil = none
+	cursorHidden   bool                              // hide the cursor highlight until the next key/focus
+	previewMode    previewMode                       // how to show each session's last message
+	previewRecent  int                               // max recent sessions to always preview (row mode)
 	previewWithin  time.Duration
 	commands       map[string]string // key name -> command template
 	ciToken        string            // "" disables the CI column
@@ -184,6 +185,17 @@ func newModel(cfg Config) model {
 			selBG = lipgloss.Color("236") // a dim default when none is configured
 		}
 	}
+	selStatusFg := map[marker]lipgloss.TerminalColor{}
+	for mk, c := range map[marker]string{
+		markerRunning: cfg.Selection.StatusColors.Running,
+		markerWaiting: cfg.Selection.StatusColors.Waiting,
+		markerIdle:    cfg.Selection.StatusColors.Idle,
+		markerUnread:  cfg.Selection.StatusColors.Unread,
+	} {
+		if c != "" {
+			selStatusFg[mk] = lipgloss.Color(c)
+		}
+	}
 	return model{
 		loader:         newLoader(),
 		styles:         newStyles(cfg),
@@ -198,6 +210,7 @@ func newModel(cfg Config) model {
 		dirNameOnly:    cfg.Display.Project == "name",
 		selColors:      cfg.Selection.Colors,
 		selStatusColor: cfg.Selection.StatusColor,
+		selStatusFg:    selStatusFg,
 		selBG:          selBG,
 		previewMode:    mode,
 		previewRecent:  cfg.Preview.Recent,
@@ -985,12 +998,23 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 		return r.Render(txt)
 	}
 	// statusSeg is seg for the marker and state word. In a reverse row with
-	// statuscolor on, it keeps the cell's colour and still reverses, so the
-	// status shows as a coloured block that matches the bar (rather than the
-	// colour dropping out, or punching a default-background hole in the bar).
-	statusSeg := func(st lipgloss.Style, txt string) string {
+	// statuscolor on, it shows the status as coloured *text* on the bar's own
+	// background (rather than a coloured block, or a default-background hole).
+	// Reverse video has no nameable background colour, so we put the status
+	// colour on the background channel and let the terminal's reverse swap turn
+	// it into the foreground — leaving the background as the same default-derived
+	// colour the rest of the reversed row uses.
+	statusSeg := func(st lipgloss.Style, mk marker, txt string) string {
 		if m.selStatusColor && sel.GetReverse() && !isNoColor(st.GetForeground()) {
-			return overlay(st, sel).Render(txt)
+			fg := st.GetForeground()
+			if o, ok := m.selStatusFg[mk]; ok {
+				fg = o // colour picked for the reversed bar
+			}
+			return lipgloss.NewStyle().
+				Background(fg).
+				Reverse(true).
+				Bold(st.GetBold()).
+				Render(txt)
 		}
 		return seg(st, txt)
 	}
@@ -1000,14 +1024,14 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 	var b strings.Builder
 	b.WriteString(seg(m.styles.index, fmt.Sprintf("%4d", idx+1)))
 	b.WriteString(gap(1))
-	b.WriteString(statusSeg(m.styleFor(mk), m.statusCell(mk)))
+	b.WriteString(statusSeg(m.styleFor(mk), mk, m.statusCell(mk)))
 	if m.showWords {
 		w := " " + fmt.Sprintf("%-*s", colState, string(s.State))
 		st := lipgloss.NewStyle()
 		if ws, ok := m.styles.state[s.State]; ok && s.Live() {
 			st = ws
 		}
-		b.WriteString(statusSeg(st, w))
+		b.WriteString(statusSeg(st, wordMarker(s.State), w))
 	}
 	b.WriteString(seg(lipgloss.NewStyle(), m.tmuxCell(s)))
 	b.WriteString(gap(2))
@@ -1098,6 +1122,19 @@ func (m model) iconCell(icon, text string, w int, st lipgloss.Style, plain bool)
 		return body
 	}
 	return st.Render(body)
+}
+
+// wordMarker maps a session state to the marker whose reversed-row override
+// colour applies to the state word (which is coloured by its state style).
+func wordMarker(s SessionState) marker {
+	switch s {
+	case StateRunning:
+		return markerRunning
+	case StateWaiting:
+		return markerWaiting
+	default:
+		return markerIdle
+	}
 }
 
 // markerFor is the status a session's leading glyph should convey.
