@@ -9,12 +9,19 @@ go build -o agent-sessions .
 
 ## What it shows
 
-Every session transcript under `~/.claude/projects/`, newest first, one line
-per session: index, state, last-modified time, project directory, git
-branch, the tmux pane hosting the session (as `session:window.pane`, for
-live sessions found in one), and a subject line (the session's AI-generated
-title, falling back to the first typed prompt). The list auto-refreshes
-every 2 seconds.
+Every session transcript under `~/.claude/projects/`, most recently active
+first, one line per session: index, state, last-modified time, project
+directory, git branch, the tmux pane hosting the session (as
+`session:window.pane`, for live sessions found in one), and a subject line
+(the session's AI-generated title, falling back to the first typed prompt).
+The list auto-refreshes every 2 seconds.
+
+Ordering is by the timestamp of each transcript's last real entry, not the
+file's modification time. Claude Code rewrites a transcript's mtime for
+content-free changes too — a mode or permission-mode toggle, for instance —
+which would otherwise float an untouched session to the top; keying off the
+last timestamped entry keeps that from happening. Sessions with no timestamped
+entries at all (bare mode-only stubs) sort to the bottom.
 
 Each session's last assistant message — the thing Claude last said, e.g. the
 `Done!` ending a turn — is shown too. By default it appears as an indented
