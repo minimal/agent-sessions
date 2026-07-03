@@ -1,6 +1,7 @@
 # agent-sessions
 
-A Mutt-style TUI for browsing Claude Code sessions on this machine.
+A Mutt-style TUI for browsing coding-agent sessions on this machine —
+Claude Code, pi, and any other source with an adapter (see `ADAPTERS.md`).
 
 ```
 go build -o agent-sessions .
@@ -9,12 +10,13 @@ go build -o agent-sessions .
 
 ## What it shows
 
-Every session transcript under `~/.claude/projects/`, most recently active
+Every session transcript from each enabled source (Claude Code's
+`~/.claude/projects/`, pi's `~/.pi/agent/sessions/`, ...), most recently active
 first, one line per session: index, state, last-modified time, project
 directory, git branch, the tmux pane hosting the session (as
 `session:window.pane`, for live sessions found in one), and a subject line
-(the session's AI-generated title, falling back to the first typed prompt).
-The list auto-refreshes every 2 seconds.
+(Claude's AI-generated title, or for pi the first prompt / a `pi --name`
+session). The list auto-refreshes every 2 seconds.
 
 Ordering is by the timestamp of each transcript's last real entry, not the
 file's modification time. Claude Code rewrites a transcript's mtime for
@@ -56,6 +58,35 @@ session id). Registry files left behind by crashed processes are ignored by
 checking that the pid is alive and started around the registry's `startedAt`
 stamp; process inspection goes through gopsutil, so it works on both Linux
 and macOS (the macOS path hasn't been smoke-tested yet).
+
+## Sources
+
+The app merges every enabled source's transcripts, freshest first. Each
+session is tagged with its source, which drives the per-source `Enter`
+command (below) and lets `/pi` or `/claude` filter the list.
+
+- **Claude Code** — `~/.claude/projects/*/*.jsonl`, with live state from
+  `~/.claude/sessions/<pid>.json` (a per-process registry with a real PID, so
+  live sessions match to their tmux pane).
+- **pi** — `~/.pi/agent/sessions/<encoded-cwd>/*.jsonl` (or
+  `$PI_CODING_AGENT_SESSION_DIR` / `[sources.pi] session_dir`). pi keeps no
+  live-process registry and, under WSL, runs as a Windows process with no
+  visible Linux PID, so pi sessions show as offline for now — but the freshest
+  still sorts to the top by activity. Subject is the first prompt (or a
+  `pi --name` session); git branch is read from the repo.
+
+Enable/disable sources in config:
+
+```toml
+[sources.claude]
+enabled = true
+[sources.pi]
+enabled = true
+# session_dir = ""   # override; empty = $PI_CODING_AGENT_SESSION_DIR or ~/.pi/agent/sessions
+```
+
+Adding another source (Copilot CLI, ...) is one new adapter file implementing
+the `Adapter` interface plus a `[sources.<name>]` entry — see `ADAPTERS.md`.
 
 ## Keys
 
@@ -355,6 +386,27 @@ current window.
 Quoting subtlety: the expanded `{text-input:...}` value is single-quote
 escaped, and the double-quote wrapper hands it intact to the window's
 shell — a prompt containing a literal `"` is the one thing it can't carry.
+
+### Per-source Enter overrides
+
+A `[sources.<name>] enter` setting overrides the `[commands]` `enter` binding
+for that source's sessions — useful because resume syntax differs (`claude
+--resume` vs `pi --session`). pi has no live PID (no per-process registry), so
+its command uses `{cwd}`/`{id}` rather than `{pid}`/`{pane}`:
+
+```toml
+[sources.pi]
+enter = "cd {cwd} && pi --session {id}"
+```
+
+By default the command **takes over the terminal** while it runs, so
+interactive commands work (`tmux attach`, an editor, `claude --resume`). That
+briefly drops the alt-screen, so the app appears to close and reopen. Set
+`background = true` to run the command **detached**, without touching the
+terminal — no flash — for commands that only switch a tmux client or focus a
+pane and need no input or output (e.g. `switch-client` plus a focus keystroke
+when you run the app in one split and your sessions in another).
+
 
 ## Tip: a tmux key that jumps to agent-sessions
 
