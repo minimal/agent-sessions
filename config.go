@@ -23,7 +23,8 @@ const defaultConfigTOML = `# agent-sessions configuration.
 # Omitted keys keep their defaults.
 
 [styles.running]   # sessions whose turn is in progress
-fg = "2"
+fg = "10"
+bold = true
 
 [styles.waiting]   # sessions blocked on the user, e.g. a permission prompt
 fg = "3"
@@ -31,6 +32,13 @@ bold = true
 
 [styles.idle]      # sessions waiting for the next prompt
 fg = "6"
+
+[styles.unread]    # sessions that finished a turn you haven't opened yet
+fg = "208"
+bold = true
+
+[styles.offline]   # sessions with no running claude process
+faint = true
 
 [styles.dimmed]    # sessions with no activity for over a day
 faint = true
@@ -43,6 +51,18 @@ reverse = true
 
 [styles.preview]   # the last-message text shown per session
 faint = true
+
+[status]
+# Marker shown at the start of each row for its status. Defaults are Nerd
+# Font icons (need a Nerd Font in your terminal). For a plain terminal use
+# dots:   running="●" waiting="●" idle="·" unread="●" offline=" "
+# or emoji: running="🟢" waiting="🟡" idle="⚪" unread="🟠" offline=" "
+# running = "spinner" animates a braille spinner instead of a static glyph.
+running = "spinner"
+waiting = "\uf0f3"
+idle    = "\uf10c"
+unread  = "\uf111"
+offline = " "
 
 [preview]
 # Show each session's last assistant message (e.g. the "Done!" ending a
@@ -76,11 +96,20 @@ type Config struct {
 		Running  StyleConfig `toml:"running"`
 		Waiting  StyleConfig `toml:"waiting"`
 		Idle     StyleConfig `toml:"idle"`
+		Unread   StyleConfig `toml:"unread"`
+		Offline  StyleConfig `toml:"offline"`
 		Dimmed   StyleConfig `toml:"dimmed"`
 		Bar      StyleConfig `toml:"bar"`
 		Selected StyleConfig `toml:"selected"`
 		Preview  StyleConfig `toml:"preview"`
 	} `toml:"styles"`
+	Status struct {
+		Running string `toml:"running"` // "spinner" animates; else a literal glyph
+		Waiting string `toml:"waiting"`
+		Idle    string `toml:"idle"`
+		Unread  string `toml:"unread"`
+		Offline string `toml:"offline"`
+	} `toml:"status"`
 	Preview struct {
 		Mode   string `toml:"mode"`   // "row", "column", or "off"
 		Recent int    `toml:"recent"` // max recent sessions to always preview

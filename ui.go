@@ -41,6 +41,8 @@ type styles struct {
 	selected lipgloss.Style
 	dim      lipgloss.Style
 	preview  lipgloss.Style
+	unread   lipgloss.Style
+	offline  lipgloss.Style
 	state    map[SessionState]lipgloss.Style
 }
 
@@ -50,6 +52,8 @@ func newStyles(cfg Config) styles {
 		selected: cfg.Styles.Selected.style(),
 		dim:      cfg.Styles.Dimmed.style(),
 		preview:  cfg.Styles.Preview.style(),
+		unread:   cfg.Styles.Unread.style(),
+		offline:  cfg.Styles.Offline.style(),
 		state: map[SessionState]lipgloss.Style{
 			StateRunning: cfg.Styles.Running.style(),
 			StateWaiting: cfg.Styles.Waiting.style(),
@@ -57,6 +61,27 @@ func newStyles(cfg Config) styles {
 		},
 	}
 }
+
+// marker is the status a row's leading glyph conveys. It mostly mirrors the
+// session state, but adds "unread" (a finished turn not yet opened) and
+// "offline" (no running process).
+type marker int
+
+const (
+	markerOffline marker = iota
+	markerIdle
+	markerRunning
+	markerWaiting
+	markerUnread
+)
+
+var allMarkers = []marker{markerOffline, markerIdle, markerRunning, markerWaiting, markerUnread}
+
+// spinnerFrames animate the running marker when its glyph is "spinner". Braille
+// renders in any monospace font, so it works without a Nerd Font.
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+const spinnerSentinel = "spinner"
 
 // previewMode selects how a session's last message is shown.
 type previewMode string
@@ -72,13 +97,19 @@ type model struct {
 	styles        styles
 	enterCmd      string      // command template bound to Enter
 	tmuxGlyph     string      // marker for tmux-attachable sessions; "" hides it
+	glyphs        map[marker]string
+	colGlyph      int // display width reserved for the status glyph
 	previewMode   previewMode // how to show each session's last message
 	previewRecent int         // max recent sessions to always preview (row mode)
 	previewWithin time.Duration
 	all           []Session // every session, unfiltered
 	sessions      []Session // what the index shows: all, limited by query
 	query         string
-	searching     bool // the search prompt is open and capturing keys
+	searching     bool                    // the search prompt is open and capturing keys
+	unread        map[string]bool         // session IDs that finished a turn unseen
+	seen          map[string]SessionState // last observed live state, for transitions
+	spin          int                     // running-spinner frame index
+	spinning      bool                    // a spinner tick is scheduled
 	cursor        int
 	offset        int
 	width         int
@@ -95,16 +126,40 @@ func newModel(cfg Config) model {
 	default:
 		mode = previewRow
 	}
+	glyphs := map[marker]string{
+		markerRunning: cfg.Status.Running,
+		markerWaiting: cfg.Status.Waiting,
+		markerIdle:    cfg.Status.Idle,
+		markerUnread:  cfg.Status.Unread,
+		markerOffline: cfg.Status.Offline,
+	}
 	return model{
 		loader:        newLoader(),
 		styles:        newStyles(cfg),
 		enterCmd:      cfg.Commands.Enter,
 		tmuxGlyph:     cfg.Tmux.Glyph,
+		glyphs:        glyphs,
+		colGlyph:      glyphWidth(glyphs),
 		previewMode:   mode,
 		previewRecent: cfg.Preview.Recent,
 		previewWithin: cfg.PreviewWithin(),
+		unread:        map[string]bool{},
+		seen:          map[string]SessionState{},
 		loading:       true,
 	}
+}
+
+// glyphWidth is the display width to reserve for the status glyph: the widest
+// configured marker (the spinner counts as one frame, not the word "spinner").
+func glyphWidth(glyphs map[marker]string) int {
+	w := 0
+	for mk, g := range glyphs {
+		if mk == markerRunning && g == spinnerSentinel {
+			g = spinnerFrames[0]
+		}
+		w = max(w, lipgloss.Width(g))
+	}
+	return w
 }
 
 type sessionsLoadedMsg struct {
@@ -114,7 +169,13 @@ type sessionsLoadedMsg struct {
 
 type tickMsg struct{}
 
+type spinnerTickMsg struct{}
+
 type execDoneMsg struct{ err error }
+
+// spinnerEvery paces the running-marker animation, faster than the data
+// refresh so the spinner looks alive.
+const spinnerEvery = 120 * time.Millisecond
 
 func (m model) loadCmd() tea.Msg {
 	sessions, err := m.loader.Load()
@@ -123,6 +184,31 @@ func (m model) loadCmd() tea.Msg {
 
 func tickCmd() tea.Cmd {
 	return tea.Tick(refreshEvery, func(time.Time) tea.Msg { return tickMsg{} })
+}
+
+func spinnerCmd() tea.Cmd {
+	return tea.Tick(spinnerEvery, func(time.Time) tea.Msg { return spinnerTickMsg{} })
+}
+
+// anyRunning reports whether a session's turn is currently in progress, i.e.
+// whether the spinner has anything to animate.
+func (m model) anyRunning() bool {
+	for _, s := range m.sessions {
+		if s.Live() && s.State == StateRunning {
+			return true
+		}
+	}
+	return false
+}
+
+// ensureSpinner starts the spinner ticker if a session is running and one
+// isn't already scheduled, returning the command to run (or nil).
+func (m *model) ensureSpinner() tea.Cmd {
+	if m.spinning || !m.anyRunning() {
+		return nil
+	}
+	m.spinning = true
+	return spinnerCmd()
 }
 
 func (m model) Init() tea.Cmd {
@@ -140,8 +226,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Error: " + msg.err.Error()
 			return m, nil
 		}
+		m.detectUnread(msg.sessions)
 		m.all = msg.sessions
 		m.applyFilter()
+		m.clampOffset()
+		return m, m.ensureSpinner()
 
 	case tickMsg:
 		if m.loading {
@@ -149,6 +238,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.loading = true
 		return m, tea.Batch(m.loadCmd, tickCmd())
+
+	case spinnerTickMsg:
+		if !m.anyRunning() {
+			m.spinning = false
+			return m, nil
+		}
+		m.spin++
+		return m, spinnerCmd()
 
 	case execDoneMsg:
 		if msg.err != nil {
@@ -239,8 +336,43 @@ func (m model) gotoSession() (tea.Model, tea.Cmd) {
 		}
 		vars["pane"] = s.Pane
 	}
+	delete(m.unread, s.ID) // opening it counts as reading it
 	cmd := exec.Command("sh", "-c", expandCommand(tmpl, vars))
 	return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return execDoneMsg{err} })
+}
+
+// detectUnread flags sessions that just finished a turn (running -> idle) so
+// they stand out from long-idle ones, and clears the flag when a session
+// starts a new turn or disappears. The flag is otherwise cleared only by
+// opening the session. State comparison is against the previous refresh.
+func (m *model) detectUnread(sessions []Session) {
+	present := make(map[string]bool, len(sessions))
+	for _, s := range sessions {
+		present[s.ID] = true
+		prev, seen := m.seen[s.ID]
+		switch {
+		case !s.Live():
+			delete(m.seen, s.ID)
+		case s.State == StateRunning:
+			delete(m.unread, s.ID) // a fresh turn supersedes an old completion
+			m.seen[s.ID] = s.State
+		default:
+			if seen && prev == StateRunning && s.State == StateIdle {
+				m.unread[s.ID] = true
+			}
+			m.seen[s.ID] = s.State
+		}
+	}
+	for id := range m.seen {
+		if !present[id] {
+			delete(m.seen, id)
+		}
+	}
+	for id := range m.unread {
+		if !present[id] {
+			delete(m.unread, id)
+		}
+	}
 }
 
 // handleSearchKey edits the query while the search prompt is open. The list
@@ -402,16 +534,11 @@ func (m model) View() string {
 			case r.detail:
 				line = m.styles.preview.Render(m.previewLine(s))
 			case r.si == m.cursor:
-				line = m.styles.selected.Render(pad(m.renderRow(r.si), m.width))
-			case s.Live():
-				line = m.renderRow(r.si)
-				if style, ok := m.styles.state[s.State]; ok {
-					line = style.Render(line)
-				}
-			case time.Since(s.Modified) > dimAfter:
-				line = m.styles.dim.Render(m.renderRow(r.si))
+				line = m.styles.selected.Render(pad(m.renderRow(r.si, true), m.width))
+			case !s.Live() && time.Since(s.Modified) > dimAfter:
+				line = m.styles.dim.Render(m.renderRow(r.si, true))
 			default:
-				line = m.renderRow(r.si)
+				line = m.renderRow(r.si, false)
 			}
 			b.WriteString(line)
 		}
@@ -433,8 +560,21 @@ func (m model) View() string {
 	return b.String()
 }
 
-func (m model) renderRow(idx int) string {
+// renderRow builds one session line. When plain is false the leading status
+// glyph and the state word are colour-styled; plain is used for the selected
+// and stale rows, whose whole line gets a single wrapping style instead (so
+// inner colour codes don't fight the reverse/faint).
+func (m model) renderRow(idx int, plain bool) string {
 	s := m.sessions[idx]
+	mk := m.markerFor(s)
+	glyph := m.statusCell(mk)
+	word := fmt.Sprintf("%-*s", colState, string(s.State))
+	if !plain {
+		glyph = m.styleFor(mk).Render(glyph)
+		if st, ok := m.styles.state[s.State]; ok && s.Live() {
+			word = st.Render(word)
+		}
+	}
 	subject, tail := s.Subject(), ""
 	if m.previewMode == previewColumn {
 		subject = truncPad(subject, colSubject)
@@ -442,9 +582,10 @@ func (m model) renderRow(idx int) string {
 			tail = "  " + s.LastMsg
 		}
 	}
-	line := fmt.Sprintf("%4d %-*s%s  %s  %s  %s  %s%s",
+	line := fmt.Sprintf("%4d %s %s%s  %s  %s  %s  %s%s",
 		idx+1,
-		colState, string(s.State),
+		glyph,
+		word,
 		m.tmuxCell(s),
 		s.Modified.Format("Jan 02 15:04"),
 		truncPad(s.Project(), colProject),
@@ -453,6 +594,50 @@ func (m model) renderRow(idx int) string {
 		tail,
 	)
 	return trunc(line, m.width)
+}
+
+// markerFor is the status a session's leading glyph should convey.
+func (m model) markerFor(s Session) marker {
+	if !s.Live() {
+		return markerOffline
+	}
+	if m.unread[s.ID] && s.State == StateIdle {
+		return markerUnread
+	}
+	switch s.State {
+	case StateRunning:
+		return markerRunning
+	case StateWaiting:
+		return markerWaiting
+	default:
+		return markerIdle
+	}
+}
+
+// styleFor is the colour style for a marker's glyph.
+func (m model) styleFor(mk marker) lipgloss.Style {
+	switch mk {
+	case markerRunning:
+		return m.styles.state[StateRunning]
+	case markerWaiting:
+		return m.styles.state[StateWaiting]
+	case markerIdle:
+		return m.styles.state[StateIdle]
+	case markerUnread:
+		return m.styles.unread
+	default:
+		return m.styles.offline
+	}
+}
+
+// statusCell is the fixed-width glyph slot for a marker, blank-padded so the
+// columns after it stay aligned regardless of which glyph shows.
+func (m model) statusCell(mk marker) string {
+	g := m.glyphs[mk]
+	if mk == markerRunning && g == spinnerSentinel {
+		g = spinnerFrames[m.spin%len(spinnerFrames)]
+	}
+	return pad(g, m.colGlyph)
 }
 
 // tmuxCell is the fixed-width tmux marker slot, holding the glyph for
