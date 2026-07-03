@@ -147,9 +147,14 @@ func TestScrollShowsCursorAndDetail(t *testing.T) {
 }
 
 func TestRealDataRenders(t *testing.T) {
-	sessions, err := newLoader(nil).Load()
+	sessions, err := newClaudeAdapter().Sessions()
 	if err != nil || len(sessions) == 0 {
-		t.Skip("no real sessions available")
+		t.Skip("no real claude sessions available")
+	}
+	for _, s := range sessions {
+		if s.Source != "claude" {
+			t.Errorf("claude adapter must tag Source=%q, got %q", "claude", s.Source)
+		}
 	}
 	m := testModel(previewRow, sessions)
 	m.height = 40
@@ -157,6 +162,68 @@ func TestRealDataRenders(t *testing.T) {
 	out := m.View()
 	if !strings.Contains(out, "↳ ") {
 		t.Errorf("expected at least one preview line from real data")
+	}
+}
+
+func TestPiRealDataRenders(t *testing.T) {
+	sessions, err := newPiAdapter("").Sessions()
+	if err != nil || len(sessions) == 0 {
+		t.Skip("no real pi sessions available")
+	}
+	for _, s := range sessions {
+		if s.Source != "pi" {
+			t.Errorf("pi adapter must tag Source=%q, got %q", "pi", s.Source)
+		}
+		// A session's ID is always recoverable (UUID in the filename), even for
+		// stubs. CWD is best-effort: it comes from the `session` header line, which
+		// most transcripts start with -- but resumed/forked/ephemeral sessions can
+		// omit it entirely, leaving CWD empty (the session then shows "(empty
+		// session)" and project "?", like Claude's empty transcripts). The dir name
+		// encodes the cwd too, but pi's `/`->`-` encoding is ambiguous with literal
+		// hyphens in segment names, so we don't decode it. So: assert ID always,
+		// but don't require CWD on every non-empty file.
+		if s.ID == "" {
+			t.Errorf("pi session %q has no ID (should fall back to filename UUID)", s.File)
+		}
+	}
+}
+
+// TestMultiLoaderMergeAndRender wires both adapters through the multiLoader
+// and the UI, the way the real app does, and checks the merged list renders
+// with the source-agnostic status bar. Skips when no real sessions exist.
+func TestMultiLoaderMergeAndRender(t *testing.T) {
+	var cfg Config
+	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	ml := newMultiLoader([]Adapter{newClaudeAdapter(), newPiAdapter(cfg.Sources.Pi.SessionDir)}, cfg.SortDims())
+	sessions, err := ml.Load()
+	if err != nil {
+		t.Fatalf("multiLoader.Load: %v", err)
+	}
+	if len(sessions) == 0 {
+		t.Skip("no real sessions available")
+	}
+	sources := map[string]bool{}
+	for _, s := range sessions {
+		if s.Source == "" {
+			t.Error("merged session has empty Source")
+		}
+		sources[s.Source] = true
+	}
+	if !sources["pi"] {
+		t.Errorf("expected pi sessions in the merge, got sources %v", sources)
+	}
+
+	m := newModel(cfg)
+	m.all = sessions
+	m.sessions = sessions
+	m.width, m.height = 160, 40
+	m.applyFilter()
+	m.clampOffset()
+	out := m.View()
+	if !strings.Contains(out, "Sessions:") {
+		t.Errorf("status bar should be source-agnostic 'Sessions:', got:\n%s", out)
 	}
 }
 

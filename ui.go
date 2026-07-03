@@ -118,10 +118,11 @@ const (
 )
 
 type model struct {
-	loader         *loader
+	loader         *multiLoader
 	styles         styles
-	bgExec         bool   // run key-bound commands detached (no terminal takeover)
-	tmuxGlyph      string // marker for tmux-attachable sessions; "" hides it
+	bgExec         bool              // run key-bound commands detached (no terminal takeover)
+	enterBySource  map[string]string // per-source override of the "enter" command (key = Source)
+	tmuxGlyph      string            // marker for tmux-attachable sessions; "" hides it
 	glyphs         map[marker]string
 	colGlyph       int                               // display width reserved for the status glyph
 	showWords      bool                              // show the state word next to the glyph
@@ -200,12 +201,27 @@ func newModel(cfg Config) model {
 			selStatusFg[mk] = lipgloss.Color(c)
 		}
 	}
+	var adapters []Adapter
+	if cfg.Sources.Claude.Enabled {
+		adapters = append(adapters, newClaudeAdapter())
+	}
+	if cfg.Sources.Pi.Enabled {
+		adapters = append(adapters, newPiAdapter(cfg.Sources.Pi.SessionDir))
+	}
+	enterBySource := map[string]string{}
+	if cfg.Sources.Claude.Enter != "" {
+		enterBySource["claude"] = cfg.Sources.Claude.Enter
+	}
+	if cfg.Sources.Pi.Enter != "" {
+		enterBySource["pi"] = cfg.Sources.Pi.Enter
+	}
 	return model{
-		loader:         newLoader(cfg.SortDims()),
+		loader:         newMultiLoader(adapters, cfg.SortDims()),
 		styles:         newStyles(cfg),
 		commands:       cfg.Commands,
 		liveOnly:       cfg.Filter.Running,
 		bgExec:         cfg.Background,
+		enterBySource:  enterBySource,
 		tmuxGlyph:      cfg.Tmux.Glyph,
 		glyphs:         glyphs,
 		colGlyph:       glyphWidth(glyphs),
@@ -479,6 +495,9 @@ func (m model) runCommand(tmpl string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	s := m.sessions[m.cursor]
+	if cmd, ok := m.enterBySource[s.Source]; ok && cmd != "" {
+		tmpl = cmd // a source-specific override (e.g. pi --session) wins
+	}
 	vars := map[string]string{
 		"id":    s.ID,
 		"pid":   strconv.Itoa(s.PID),
@@ -898,7 +917,7 @@ func (m model) View() string {
 	if len(m.sessions) > page {
 		pos = fmt.Sprintf("%d%%", (m.cursor+1)*100/len(m.sessions))
 	}
-	status := fmt.Sprintf("---Claude Sessions: %s---(%s)", m.status, pos)
+	status := fmt.Sprintf("---Sessions: %s---(%s)", m.status, pos)
 	if m.notice != "" {
 		status = m.notice
 	}

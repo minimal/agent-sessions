@@ -88,6 +88,21 @@ type Config struct {
 		Colors []string `toml:"colors"` // palette cycled per repo; empty uses a built-in one
 	} `toml:"git"`
 	Background bool `toml:"background"` // run key-bound commands detached (no terminal takeover)
+	// Sources enables/disables each adapter. Sections absent from the user's
+	// config keep the defaults below (enabled). [sources.<name>] may carry an
+	// optional `enter` override (per-source resume syntax differs) and
+	// source-specific options (e.g. pi's session_dir).
+	Sources struct {
+		Claude struct {
+			Enabled bool   `toml:"enabled"`
+			Enter   string `toml:"enter"` // overrides the "enter" command for claude sessions
+		} `toml:"claude"`
+		Pi struct {
+			Enabled    bool   `toml:"enabled"`
+			SessionDir string `toml:"session_dir"` // "" = $PI_CODING_AGENT_SESSION_DIR or ~/.pi/agent/sessions
+			Enter      string `toml:"enter"`       // overrides the "enter" command for pi sessions
+		} `toml:"pi"`
+	} `toml:"sources"`
 }
 
 // ciToken returns the configured CircleCI token, falling back to the
