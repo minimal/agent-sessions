@@ -106,6 +106,7 @@ type model struct {
 	loader         *loader
 	styles         styles
 	enterCmd       string // command template bound to Enter
+	enterBg        bool   // run the Enter command in the background (no terminal takeover)
 	tmuxGlyph      string // marker for tmux-attachable sessions; "" hides it
 	glyphs         map[marker]string
 	colGlyph       int                    // display width reserved for the status glyph
@@ -116,6 +117,7 @@ type model struct {
 	selColors      bool                   // keep colours on the cursor row
 	selStatusColor bool                   // keep status marker/word coloured in reverse mode
 	selBG          lipgloss.TerminalColor // highlight bg for the cursor row; nil = none
+	cursorHidden   bool                   // hide the cursor highlight until the next key/focus
 	previewMode    previewMode            // how to show each session's last message
 	previewRecent  int                    // max recent sessions to always preview (row mode)
 	previewWithin  time.Duration
@@ -162,6 +164,7 @@ func newModel(cfg Config) model {
 		loader:         newLoader(),
 		styles:         newStyles(cfg),
 		enterCmd:       cfg.Commands.Enter,
+		enterBg:        cfg.Commands.Background,
 		tmuxGlyph:      cfg.Tmux.Glyph,
 		glyphs:         glyphs,
 		colGlyph:       glyphWidth(glyphs),
@@ -289,8 +292,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = true
 		return m, m.loadCmd
 
+	case tea.FocusMsg:
+		m.cursorHidden = false // regaining focus brings the cursor back
+
 	case tea.KeyMsg:
 		m.notice = ""
+		m.cursorHidden = false // any key brings the cursor back
 		if m.searching {
 			m.handleSearchKey(msg)
 			m.clampOffset()
@@ -369,7 +376,14 @@ func (m model) gotoSession() (tea.Model, tea.Cmd) {
 		vars["pane"] = s.Pane
 	}
 	delete(m.unread, s.ID) // opening it counts as reading it
+	m.cursorHidden = true  // hide the highlight until the next key or focus
 	cmd := exec.Command("sh", "-c", expandCommand(tmpl, vars))
+	if m.enterBg {
+		// Run detached from the terminal: no alt-screen handoff (which flashes
+		// the app closed) and no output to corrupt the display. For commands
+		// that only switch a tmux client or focus a pane.
+		return m, func() tea.Msg { return execDoneMsg{cmd.Run()} }
+	}
 	return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return execDoneMsg{err} })
 }
 
@@ -565,9 +579,9 @@ func (m model) View() string {
 			switch {
 			case r.detail:
 				line = m.styles.preview.Render(m.previewLine(s))
-			case r.si == m.cursor && m.selColors:
+			case r.si == m.cursor && !m.cursorHidden && m.selColors:
 				line = m.renderRow(r.si, true, lipgloss.NewStyle().Background(m.selBG), true)
-			case r.si == m.cursor:
+			case r.si == m.cursor && !m.cursorHidden:
 				line = m.renderRow(r.si, false, m.styles.selected, true)
 			case !s.Live() && time.Since(s.Activity) > dimAfter:
 				line = m.renderRow(r.si, false, m.styles.dim, false)

@@ -164,7 +164,10 @@ highlight** instead of reverse. The highlight colour comes from
 plain reverse bar but still want the status to read at a glance, keep `colors
 = false` and set `statuscolor = true`: on the cursor row the status marker and
 the running/idle/waiting word keep their own colour (so the spinner stays
-coloured and animated) while the rest of the row stays reverse.
+coloured and animated) while the rest of the row stays reverse. Either way, pressing
+`Enter` hides the highlight until the next keystroke or until the window
+regains focus, so the row you were reading isn't masked while you look at the
+session you opened.
 
 The `[tmux]` section sets the marker shown on tmux-attachable sessions:
 
@@ -175,13 +178,21 @@ glyph = "⊟"   # set to "" to hide the marker
 
 `[commands] enter` is the shell command bound to `Enter`. `{id}`, `{pid}`,
 `{cwd}`, `{file}` and `{pane}` expand to shell-quoted values ({pane} being
-the tmux pane hosting the session's claude process), and the command gets
-the terminal while it runs, so interactive commands work:
+the tmux pane hosting the session's claude process):
 
 ```toml
 [commands]
 enter = "cd {cwd} && claude --resume {id}"
+background = false
 ```
+
+By default the command **takes over the terminal** while it runs, so
+interactive commands work (`tmux attach`, an editor, `claude --resume`). That
+briefly drops the alt-screen, so the app appears to close and reopen. Set
+`background = true` to run the command **detached**, without touching the
+terminal — no flash — for commands that only switch a tmux client or focus a
+pane and need no input or output (e.g. `switch-client` plus a focus keystroke
+when you run the app in one split and your sessions in another).
 
 ## Tip: a tmux key that jumps to agent-sessions
 

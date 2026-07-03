@@ -140,6 +140,13 @@ glyph = "⊟"
 # switch-client moves the client when run inside tmux, attach-session
 # takes over the terminal when run outside it.
 enter = "tmux select-pane -t {pane} && tmux select-window -t {pane} && tmux switch-client -t {pane} 2>/dev/null || tmux attach-session -t {pane}"
+# false (default): the Enter command takes over the terminal while it runs, so
+# interactive commands work (tmux attach, an editor, claude --resume). This
+# briefly exits the alt-screen, so the app appears to close and reopen. true:
+# run the command in the background without touching the terminal — no flash —
+# for commands that just switch a tmux client or focus a pane and need no
+# input/output (e.g. switch-client + a focus keystroke from a split).
+background = false
 
 # --- Catppuccin Mocha example -------------------------------------------------
 # The ANSI-base defaults above already follow your terminal theme. To pin exact
@@ -204,7 +211,8 @@ type Config struct {
 		Glyph string `toml:"glyph"` // marker on tmux-attachable sessions; "" hides it
 	} `toml:"tmux"`
 	Commands struct {
-		Enter string `toml:"enter"`
+		Enter      string `toml:"enter"`
+		Background bool   `toml:"background"`
 	} `toml:"commands"`
 }
 
