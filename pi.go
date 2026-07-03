@@ -32,10 +32,14 @@ type piLine struct {
 
 // piAdapter reads pi transcripts under ~/.pi/agent/sessions (overridable via
 // [sources.pi] session_dir or $PI_CODING_AGENT_SESSION_DIR). pi keeps no live-process
-// registry, and under WSL its agent runs as a Windows process with no visible
-// Linux PID or tmux pane, so Live is a no-op for now: sessions surface as
-// offline but still sort to the top by activity/mtime. A heuristic
-// (mtime recency + cwd->pane match) is a future phase.
+// registry (unlike Claude's ~/.claude/sessions/<pid>.json), so with no extension
+// writing one there's no authoritative live signal, and Live is a no-op for now:
+// sessions surface as offline but still sort to the top by activity/mtime. The
+// process itself is a normal Linux process (here, a WSL pnpm install on nix node),
+// visible to gopsutil/tmux on the host — a future phase can find its pane by cwd
+// match (tmuxPaneForCWD) and, with a small pi extension writing a marker file on
+// the session_start/agent_start/agent_end/session_shutdown hooks, get real
+// running/waiting/idle state.
 type piAdapter struct {
 	dir   string // override; "" = env/default
 	cache *transcriptCache
@@ -78,9 +82,12 @@ func (a *piAdapter) Sessions() ([]Session, error) {
 	return sessions, nil
 }
 
-// Live is a no-op: pi has no live-process registry, and under WSL its process
-// isn't visible to gopsutil or tmux. Sessions show as offline; the freshest
-// still sorts to the top by activity/mtime.
+// Live is a no-op for now: pi has no live-process registry, so without a marker
+// file from an extension there's no session-id -> PID/status mapping to attach.
+// (The process is a normal Linux process and visible to the host — the gap is the
+// missing registry, not process visibility.) Sessions show as offline; the
+// freshest still sorts to the top by activity/mtime. See ADAPTERS.md for the
+// cwd-pane match and extension-marker follow-ups.
 func (a *piAdapter) Live(sessions []Session) {}
 
 // discoverPi lists every pi transcript under root. Each project's transcripts

@@ -26,8 +26,8 @@ type Adapter interface {
 	Sessions() ([]Session, error)
 
 	// Live attaches running-process state (State, PID, Pane) in place,
-	// best-effort. Sources with no usable live signal (e.g. pi under WSL, where
-	// the agent runs as a Windows process with no visible Linux PID) implement
+	// best-effort. Sources with no usable live signal (e.g. pi without a
+	// marker-writing extension, which has no per-process registry) implement
 	// a no-op; their sessions surface as offline but still sort to the top by
 	// activity/mtime. Each adapter only touches sessions it produced (by Source).
 	Live(sessions []Session)

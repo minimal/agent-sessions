@@ -47,11 +47,15 @@ are `Slug` (harmless; pi leaves it `""`) and the *semantics* of `Title` (Claude'
 - **Timestamps** are RFC3339 `.Z` — identical to Claude, so `time.RFC3339`
   parsing is shared.
 - **No live-process registry.** Unlike Claude's `~/.claude/sessions/<pid>.json`,
-  pi writes nothing per-process. Worse, on this WSL machine pi is a **Windows**
-  process (`/mnt/c/.../npm/pi` → Windows `node`): there is no Linux PID for
-  `gopsutil` to see, `lsof` can't find the open file, and the process is **not**
-  in a Linux tmux pane. The Claude `pid → process-tree → tmux pane` path is
-  unusable for pi. (Copilot CLI, if run natively on Linux, may be fine.)
+  pi writes nothing per-process. The pi process itself is a normal Linux process
+  here (a WSL pnpm install running on nix node), visible to host `gopsutil`/tmux
+  like any other — so a future pid-walk or cwd->pane match can find its pane. The
+  gap is only the missing registry: there's no session-id -> PID/status file to
+  read, so without a marker-writing extension (see phase 3) we can't attach live
+  state. (A Windows pi install also exists on this machine, but the active one is
+  the WSL pnpm install. Note: a sandboxed dev shell — bubblewrap — can't see the
+  host's processes, which can mislead during investigation; the shipped TUI binary
+  is not sandboxed and sees them fine.)
 - **Resume CLI:** `pi --session <path|partial-uuid>`, `pi --session-id <id>`,
   `pi --continue` (previous in cwd), `pi --resume` (interactive picker).
 
@@ -76,9 +80,10 @@ type Adapter interface {
     Sessions() ([]Session, error)
 
     // Live attaches running-process state (State, PID, Pane) in place,
-    // best-effort. Sources with no usable live signal (e.g. pi under WSL)
-    // implement a no-op; sessions then surface as "offline" but still sort to
-    // the top by activity/mtime.
+    // best-effort. Sources with no usable live signal (e.g. pi without a
+    // marker-writing extension, which has no per-process registry) implement
+    // a no-op; sessions then surface as "offline" but still sort to the
+    // top by activity/mtime.
     Live(sessions []Session)
 }
 ```
@@ -162,11 +167,23 @@ Phase 1 ships a **no-op**: pi sessions show offline, but the freshest still
 sorts to the top via Activity/mtime, so the browser is fully useful for past
 sessions and the current one.
 
-Phase 2 (heuristic, optional): a session is "live" if its file mtime is within
-~15s; `State = running` if within ~3s (actively streaming) else `idle`; `PID =
-0` (unreliable under WSL); `Pane = tmuxPaneForCWD(cwd)` (works since the pane's
-cwd is the Linux launch dir). This is deliberately coarse and documented as
-approximate — there's no authoritative signal without a pi-side registry.
+Phase 2 (heuristic, optional, no extension): a session is "live" if its file
+mtime is within ~15s; `State = running` if within ~3s (actively streaming) else
+`idle`; `Pane = tmuxPaneForCWD(cwd)`. This is deliberately coarse and documented
+as approximate — there's no authoritative signal without a marker file. (The
+pane match is Linux-side and works because the pi process is a normal Linux
+process whose tmux pane's `pane_current_path` equals the session cwd.)
+
+Phase 3 (authoritative, needs a small pi extension): an extension subscribes to
+pi's `session_start`/`agent_start`/`agent_end`/`session_shutdown` hooks and
+writes a marker file `~/.pi/agent/live/<sid>.json` = `{pid, pane, cwd, status}`
+(cleaned up on shutdown). The pi adapter's `Live()` reads these. This is the
+`skyfallsin/pi-room` pattern (`~/.pi/room/<pane>.json` with `{pane,pid,cwd,
+session,registered}`, using `process.env.TMUX_PANE`) and the `DxVapor/pi-supacode`
+pattern (lifecycle hooks -> status), just writing a file our TUI reads instead
+of Supacode's socket protocol. Feasible here because the active pi is the WSL
+pnpm install (Linux node), so the extension sees `TMUX_PANE` and writes files a
+Linux Go TUI reads. This fixes BOTH pane and live state authoritatively.
 
 ## Config
 
@@ -234,5 +251,8 @@ notice — which is why the pi default uses only `{cwd}`/`{id}`.
   isolation, but exports a pile of types and adds import-cycle discipline for
   little gain at this size. Pick this only if external contributors arrive.
 - **pi live-detection scope.** Recommended: ship phase 1 (no-op `Live`) then
-  decide on the heuristic. There's no authoritative live signal for pi under
-  WSL, so phase 1 is honest and still useful; phase 2 is approximate.
+  decide between the heuristic (phase 2, no extension) and the marker-file
+  extension (phase 3, authoritative). The extension is now known feasible (the
+  active pi is WSL-native, so `TMUX_PANE` and the filesystem are visible to it)
+  and has direct prior art (`pi-room`, `pi-supacode`); phase 2 is the zero-setup
+  fallback. Phase 3 is the path to real running/waiting/idle markers for pi.

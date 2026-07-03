@@ -70,10 +70,12 @@ command (below) and lets `/pi` or `/claude` filter the list.
   live sessions match to their tmux pane).
 - **pi** — `~/.pi/agent/sessions/<encoded-cwd>/*.jsonl` (or
   `$PI_CODING_AGENT_SESSION_DIR` / `[sources.pi] session_dir`). pi keeps no
-  live-process registry and, under WSL, runs as a Windows process with no
-  visible Linux PID, so pi sessions show as offline for now — but the freshest
-  still sorts to the top by activity. Subject is the first prompt (or a
-  `pi --name` session); git branch is read from the repo.
+  live-process registry, so without a marker-writing extension (a future phase,
+  see `ADAPTERS.md`) pi sessions show as offline for now — but the freshest
+  still sorts to the top by activity. The pi process itself is a normal Linux
+  process (here, a WSL pnpm install on nix node), so pane-finding by cwd match
+  and an extension-based live state are both feasible. Subject is the first
+  prompt (or a `pi --name` session); git branch is read from the repo.
 
 Enable/disable sources in config:
 
