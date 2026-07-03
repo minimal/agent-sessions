@@ -33,9 +33,21 @@ type Config struct {
 		Bar      StyleConfig `toml:"bar"`
 		Selected StyleConfig `toml:"selected"`
 		Preview  StyleConfig `toml:"preview"`
+		Index    StyleConfig `toml:"index"`   // the leading row number
+		Time     StyleConfig `toml:"time"`    // the last-activity timestamp
+		Project  StyleConfig `toml:"project"` // the directory column
+		Branch   StyleConfig `toml:"branch"`  // the git branch column
+		Subject  StyleConfig `toml:"subject"` // the session title column
 	} `toml:"styles"`
 	Commands map[string]string `toml:"commands"`
-	Status   struct {
+	Icons    struct {
+		Branch string `toml:"branch"` // shown before the branch; "" hides it
+		Dir    string `toml:"dir"`    // shown before the directory; "" hides it
+	} `toml:"icons"`
+	Display struct {
+		Project string `toml:"project"` // "full" path or just the "name"
+	} `toml:"display"`
+	Status struct {
 		Running string `toml:"running"` // "spinner" animates; else a literal glyph
 		Waiting string `toml:"waiting"`
 		Idle    string `toml:"idle"`
