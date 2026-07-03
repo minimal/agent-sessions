@@ -746,7 +746,7 @@ func (m model) showPreviewRow(i int) bool {
 	if i == m.cursor {
 		return true
 	}
-	return i < m.previewRecent && time.Since(m.sessions[i].Modified) <= m.previewWithin
+	return i < m.previewRecent && time.Since(m.sessions[i].Activity) <= m.previewWithin
 }
 
 // cursorLine is the display-line index of the selected session's main row.
@@ -814,7 +814,7 @@ func (m model) View() string {
 				line = m.styles.preview.Render(m.previewLine(s))
 			case r.si == m.cursor:
 				line = m.styles.selected.Render(pad(m.renderRow(r.si, true), m.width))
-			case !s.Live() && time.Since(s.Modified) > dimAfter:
+			case !s.Live() && time.Since(s.Activity) > dimAfter:
 				line = m.styles.dim.Render(m.renderRow(r.si, true))
 			default:
 				line = m.renderRow(r.si, false)
@@ -963,7 +963,7 @@ func (m model) renderRow(idx int, plain bool) string {
 		glyph,
 		word,
 		m.tmuxCell(s),
-		s.Modified.Format("Jan 02 15:04"),
+		s.When().Format("Jan 02 15:04"),
 		truncPad(s.Project(), colProject),
 		truncPad(s.Branch, colBranch),
 		truncPad(s.Pane, colPane),

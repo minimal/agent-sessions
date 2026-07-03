@@ -1,12 +1,20 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 )
 
 func testModel(mode previewMode, sessions []Session) model {
+	// Real sessions' last activity tracks their mtime; only timestamp-less
+	// stubs diverge. Mirror that so fixtures need only set Modified.
+	for i := range sessions {
+		if sessions[i].Activity.IsZero() {
+			sessions[i].Activity = sessions[i].Modified
+		}
+	}
 	m := model{
 		previewMode:   mode,
 		previewRecent: 5,
@@ -18,6 +26,29 @@ func testModel(mode previewMode, sessions []Session) model {
 	}
 	m.clampOffset()
 	return m
+}
+
+func TestActivityIgnoresTimestamplessLines(t *testing.T) {
+	var s Session
+	msgTS := "2026-07-02T19:08:41.637Z"
+	absorb(&s, transcriptLine{
+		Type: "assistant", Timestamp: msgTS,
+		Message: &struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		}{Role: "assistant", Content: json.RawMessage(`"Done!"`)},
+	})
+	want, _ := time.Parse(time.RFC3339, msgTS)
+	if !s.Activity.Equal(want) {
+		t.Fatalf("message line should set Activity to %v, got %v", want, s.Activity)
+	}
+	// A later mode/permission-mode write carries no timestamp and must not
+	// advance Activity — otherwise a stray mode change reorders the session.
+	absorb(&s, transcriptLine{Type: "mode"})
+	absorb(&s, transcriptLine{Type: "permission-mode"})
+	if !s.Activity.Equal(want) {
+		t.Errorf("timestamp-less lines must not change Activity, got %v", s.Activity)
+	}
 }
 
 func TestRowModePreviews(t *testing.T) {
