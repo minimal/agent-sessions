@@ -231,3 +231,46 @@ Add this object to `hooks.Notification` (not `hooks.Stop`):
 
 Delete its object from the event array (find it by the `# tmux-stop-notify` /
 `# tmux-notify-input` marker), then reload via `/hooks` or restart.
+
+---
+
+## Bonus: focus-follows-Enter (agent-sessions + Ghostty splits)
+
+Not a Claude Code hook — this is agent-sessions' own `[commands] enter`. If you
+run the app in one Ghostty split and your tmux sessions in another, pressing
+Enter switches the tmux client to the target pane but leaves keyboard focus on
+the app's split; you then have to hit the split-nav key yourself. Ghostty has
+no remote-control CLI to focus a split by target, so the workaround is to
+simulate its split-focus keybind with an AppleScript keystroke appended to the
+Enter command.
+
+In `$XDG_CONFIG_HOME/agent-sessions/config.toml` (macOS:
+`~/Library/Application Support/agent-sessions/config.toml`):
+
+```toml
+[commands]
+# Switch the tmux client to the pane, then move Ghostty focus to the split
+# below (app on top, sessions below). key code 125 = down arrow.
+enter = "tmux select-pane -t {pane} && tmux select-window -t {pane} && tmux switch-client -t {pane} 2>/dev/null; osascript -e 'tell application \"System Events\" to key code 125 using {command down, option down}'"
+```
+
+Requirements and gotchas — all learned the hard way:
+
+- **The app must run *outside* tmux** (a plain shell in its Ghostty split). The
+  synthetic keystroke is only permitted when the process macOS holds
+  *responsible* is an app you've granted. Run the app under tmux and the chain
+  dead-ends at the tmux **server daemon** (not Ghostty), so the keystroke fails
+  with `execution error: … not allowed to send keystrokes (1002)` no matter
+  what you grant. The app doesn't need tmux — it only drives it via CLI.
+- **Grant Ghostty Accessibility**: System Settings ▸ Privacy & Security ▸
+  Accessibility ▸ add/enable **Ghostty**. (Adding it is what matters; a restart
+  isn't required once it's in the list.)
+- **Restart agent-sessions** after editing `enter` — it reads config at startup.
+- **Direction = your layout.** `cmd+alt+arrow` is `goto_split:<dir>` on Ghostty
+  defaults: down `125`, up `126`, left `123`, right `124` (with
+  `{command down, option down}`). Or `cmd+]` = next split: key code `30` with
+  `command down` (fine when there are only two splits).
+- **Ghostty-specific.** iTerm can select a split precisely via AppleScript;
+  kitty (`kitty @ focus-window`) and WezTerm (`wezterm cli`) have proper
+  remote-control CLIs. Only fires for live, in-tmux sessions (the app's `{pane}`
+  guard skips the rest).
