@@ -154,15 +154,25 @@ logic in a script and let the hook just call it. Bonus: it foregrounds the
 correct terminal (Ghostty, iTerm, …) by walking the tmux client's process
 ancestry to the owning `.app`.
 
-Save as `~/.claude/bin/claude-tmux-notify` and `chmod +x` it:
+Save as `~/.claude/bin/claude-tmux-notify` and `chmod +x` it. It takes three
+optional args — `$1` title, `$2` sound, `$3` group tag — so the *same* script
+serves both the Stop hook (defaults) and the AskUserQuestion hook (Recipe 4).
+The group tag keeps the two in separate coalescing groups, so a later
+"finished" alert doesn't replace a pending "needs input" one:
 
 ```bash
 #!/bin/bash
-# Notify when a Claude turn finishes in a tmux pane. Clicking focuses the
+# Notify about a Claude event in a tmux pane. Clicking focuses the
 # pane/window/session and foregrounds its terminal app. Fires only in tmux,
 # never under Supacode.
+#   Stop hook            -> defaults ("Claude finished", Glass, "stop")
+#   AskUserQuestion hook -> "Claude needs input" Ping ask
 [ -n "${SUPACODE_SURFACE_ID:-}" ] && exit 0
 [ -z "${TMUX:-}" ] && exit 0
+
+title="${1:-Claude finished}"
+sound="${2:-Glass}"
+tag="${3:-stop}"
 
 TB=/opt/homebrew/bin/tmux
 p="${TMUX_PANE:-}"
@@ -182,11 +192,11 @@ focus="$TB select-pane -t $p; $TB select-window -t $p; $TB switch-client -t $p"
 
 TN=/opt/homebrew/bin/terminal-notifier
 if [ -x "$TN" ]; then
-  "$TN" -title "Claude finished" -subtitle "tmux ${win}" -message "${dir##*/}" \
-        -sound Glass -group "claude-$p" -execute "$focus"
+  "$TN" -title "$title" -subtitle "tmux ${win}" -message "${dir##*/}" \
+        -sound "$sound" -group "claude-$tag-$p" -execute "$focus"
 else
-  m=${dir##*/}; m=${m//\\/}; m=${m//\"/}; s="tmux ${win}"; s=${s//\"/}
-  /usr/bin/osascript -e "display notification \"$m\" with title \"Claude finished\" subtitle \"$s\" sound name \"Glass\""
+  m=${dir##*/}; m=${m//\\/}; m=${m//\"/}; s="tmux ${win}"; s=${s//\"/}; t=${title//\"/}
+  /usr/bin/osascript -e "display notification \"$m\" with title \"$t\" subtitle \"$s\" sound name \"$sound\""
 fi
 exit 0
 ```
@@ -227,10 +237,41 @@ Add this object to `hooks.Notification` (not `hooks.Stop`):
 
 ---
 
+## Recipe 4 — AskUserQuestion hook (pinged when Claude asks you a question)
+
+The `Notification` event (Recipe 3) covers permission prompts, but Claude's
+`AskUserQuestion` tool — the multiple-choice questions it poses mid-task — is a
+*tool call*, so it's easy to miss if you only watch `Notification`. Catch it
+with a `PreToolUse` hook matching `AskUserQuestion`, which fires exactly when
+the question is presented. It reuses the Recipe 2b helper script with a
+different title/sound/tag:
+
+```json
+{
+  "matcher": "AskUserQuestion",
+  "hooks": [
+    {
+      "type": "command",
+      "command": "[ -x \"$HOME/.claude/bin/claude-tmux-notify\" ] && \"$HOME/.claude/bin/claude-tmux-notify\" \"Claude needs input\" Ping ask >/dev/null 2>&1 || true # tmux-ask-notify",
+      "timeout": 10
+    }
+  ]
+}
+```
+
+Append this object to `hooks.PreToolUse` (it's an array; keep any existing
+entries, including Supacode's `awaiting_input` one). The `matcher` is a regex
+over the tool name — add `ExitPlanMode` (`"AskUserQuestion|ExitPlanMode"`) to
+also get pinged when Claude presents a plan for approval. `|| true` keeps the
+hook non-blocking, so it never delays or suppresses the question itself.
+
+---
+
 ## Removing a hook
 
 Delete its object from the event array (find it by the `# tmux-stop-notify` /
-`# tmux-notify-input` marker), then reload via `/hooks` or restart.
+`# tmux-notify-input` / `# tmux-ask-notify` marker), then reload via `/hooks` or
+restart.
 
 ---
 
