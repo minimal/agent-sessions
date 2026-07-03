@@ -92,6 +92,16 @@ colors = false
 # marker and the running/idle/waiting word in their own colour (so the spinner
 # and state word stay coloured on the cursor row) while the rest stays reverse.
 statuscolor = false
+# The status text on the reversed row uses each status's normal colour. Those
+# are tuned for the dark rows, so on the pale reversed bar they can look a touch
+# light; override them here with colours picked for that background (unset = use
+# the normal colour). On a light terminal theme the reversed bar is dark, so you
+# might instead want brighter values here.
+# [selection.statuscolors]
+# running = "2"     # darker green
+# waiting = "3"
+# idle    = "4"
+# unread  = "166"   # darker orange
 
 [status]
 # Marker shown at the start of each row for its status. Defaults are Nerd
