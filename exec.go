@@ -28,10 +28,19 @@ func commandLogPath() string {
 	return filepath.Join(dir, "agent-sessions", "commands.log")
 }
 
-// execCmd runs an expanded command template with the terminal attached,
-// teeing everything it prints to the command log.
-func execCmd(tmpl string, vars map[string]string) tea.Cmd {
-	return tea.Exec(&loggedCommand{line: expandCommand(tmpl, vars)},
+// execCmd runs an expanded command template. With bg it runs detached — no
+// alt-screen handoff (which flashes the app closed) and no output to corrupt
+// the display, suiting commands that only orchestrate tmux. Otherwise the
+// command takes over the terminal so interactive ones (an editor,
+// claude --resume) work, teeing everything it prints to the command log.
+func execCmd(tmpl string, vars map[string]string, bg bool) tea.Cmd {
+	line := expandCommand(tmpl, vars)
+	if bg {
+		return func() tea.Msg {
+			return execDoneMsg{exec.Command("sh", "-c", line).Run()}
+		}
+	}
+	return tea.Exec(&loggedCommand{line: line},
 		func(err error) tea.Msg { return execDoneMsg{err} })
 }
 

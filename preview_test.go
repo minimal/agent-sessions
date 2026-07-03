@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 )
@@ -307,6 +308,34 @@ func TestReverseStatusColor(t *testing.T) {
 	}
 	if !strings.Contains(out, "\x1b[7m") {
 		t.Errorf("the rest of the row should still be plain reverse, got %q", out)
+	}
+}
+
+func TestCursorHiddenRevealsOnKeyAndFocus(t *testing.T) {
+	m := glyphModel()
+	m.sessions = []Session{{ID: "x", Title: "s", PID: 1, State: StateIdle, Modified: time.Now()}}
+
+	m.cursorHidden = true
+	afterKey, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if afterKey.(model).cursorHidden {
+		t.Error("a keystroke should reveal the cursor again")
+	}
+
+	m.cursorHidden = true
+	afterFocus, _ := m.Update(tea.FocusMsg{})
+	if afterFocus.(model).cursorHidden {
+		t.Error("regaining focus should reveal the cursor")
+	}
+}
+
+func TestEnterHidesCursor(t *testing.T) {
+	m := glyphModel()
+	m.commands = map[string]string{"enter": "true"} // no placeholders, so it launches for any session
+	m.sessions = []Session{{ID: "x", Title: "s", PID: 1, State: StateIdle, Modified: time.Now()}}
+	m.cursor = 0
+	after, _ := m.runCommand(m.commands["enter"])
+	if !after.(model).cursorHidden {
+		t.Error("running a command should hide the cursor highlight")
 	}
 }
 
