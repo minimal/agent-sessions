@@ -11,6 +11,7 @@ func testModel(mode previewMode, sessions []Session) model {
 		previewMode:   mode,
 		previewRecent: 5,
 		previewWithin: 20 * time.Minute,
+		showWords:     true,
 		sessions:      sessions,
 		width:         160,
 		height:        40, // tall enough to show every row
@@ -165,13 +166,34 @@ func glyphModel() model {
 			markerUnread:  "●",
 			markerOffline: " ",
 		},
-		unread: map[string]bool{},
-		seen:   map[string]SessionState{},
-		width:  160,
-		height: 40,
+		showWords: true,
+		unread:    map[string]bool{},
+		seen:      map[string]SessionState{},
+		width:     160,
+		height:    40,
 	}
 	m.colGlyph = glyphWidth(m.glyphs)
 	return m
+}
+
+func TestIconOnlyMode(t *testing.T) {
+	m := glyphModel()
+	m.sessions = []Session{{ID: "a", Title: "x", PID: 1, State: StateIdle, Modified: time.Now()}}
+
+	withWords := m.View()
+	if !strings.Contains(withWords, "idle") {
+		t.Fatalf("expected state word with showWords=true, got:\n%s", withWords)
+	}
+
+	m.showWords = false
+	iconOnly := m.View()
+	if strings.Contains(iconOnly, "idle") {
+		t.Errorf("state word should be hidden with showWords=false, got:\n%s", iconOnly)
+	}
+	// The glyph still shows.
+	if !strings.Contains(iconOnly, "·") {
+		t.Errorf("glyph should still render in icon-only mode, got:\n%s", iconOnly)
+	}
 }
 
 func TestDetectUnreadTransition(t *testing.T) {

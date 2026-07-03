@@ -98,7 +98,8 @@ type model struct {
 	enterCmd      string      // command template bound to Enter
 	tmuxGlyph     string      // marker for tmux-attachable sessions; "" hides it
 	glyphs        map[marker]string
-	colGlyph      int // display width reserved for the status glyph
+	colGlyph      int  // display width reserved for the status glyph
+	showWords     bool // show the state word next to the glyph
 	previewMode   previewMode // how to show each session's last message
 	previewRecent int         // max recent sessions to always preview (row mode)
 	previewWithin time.Duration
@@ -140,6 +141,7 @@ func newModel(cfg Config) model {
 		tmuxGlyph:     cfg.Tmux.Glyph,
 		glyphs:        glyphs,
 		colGlyph:      glyphWidth(glyphs),
+		showWords:     cfg.Status.Words,
 		previewMode:   mode,
 		previewRecent: cfg.Preview.Recent,
 		previewWithin: cfg.PreviewWithin(),
@@ -568,12 +570,18 @@ func (m model) renderRow(idx int, plain bool) string {
 	s := m.sessions[idx]
 	mk := m.markerFor(s)
 	glyph := m.statusCell(mk)
-	word := fmt.Sprintf("%-*s", colState, string(s.State))
 	if !plain {
 		glyph = m.styleFor(mk).Render(glyph)
-		if st, ok := m.styles.state[s.State]; ok && s.Live() {
-			word = st.Render(word)
+	}
+	word := ""
+	if m.showWords {
+		w := fmt.Sprintf("%-*s", colState, string(s.State))
+		if !plain {
+			if st, ok := m.styles.state[s.State]; ok && s.Live() {
+				w = st.Render(w)
+			}
 		}
+		word = " " + w
 	}
 	subject, tail := s.Subject(), ""
 	if m.previewMode == previewColumn {
@@ -582,7 +590,7 @@ func (m model) renderRow(idx int, plain bool) string {
 			tail = "  " + s.LastMsg
 		}
 	}
-	line := fmt.Sprintf("%4d %s %s%s  %s  %s  %s  %s%s",
+	line := fmt.Sprintf("%4d %s%s%s  %s  %s  %s  %s%s",
 		idx+1,
 		glyph,
 		word,

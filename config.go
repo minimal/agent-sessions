@@ -63,6 +63,9 @@ waiting = "\uf0f3"
 idle    = "\uf10c"
 unread  = "\uf111"
 offline = " "
+# Show the state word (running/waiting/idle) next to the glyph. Set false for
+# a compact, icon-only column.
+words = true
 
 [preview]
 # Show each session's last assistant message (e.g. the "Done!" ending a
@@ -109,6 +112,7 @@ type Config struct {
 		Idle    string `toml:"idle"`
 		Unread  string `toml:"unread"`
 		Offline string `toml:"offline"`
+		Words   bool   `toml:"words"` // show the state word next to the glyph
 	} `toml:"status"`
 	Preview struct {
 		Mode   string `toml:"mode"`   // "row", "column", or "off"
