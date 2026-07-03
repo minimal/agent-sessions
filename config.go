@@ -55,6 +55,11 @@ mode = "row"
 recent = 5
 within = "20m"
 
+[tmux]
+# Marker shown next to live sessions running inside a tmux pane, i.e. the
+# ones the default Enter command can jump to. Set to "" to hide it.
+glyph = "⊟"
+
 [commands]
 # Shell command run when pressing Enter on a session. {id}, {pid}, {cwd},
 # {file} and {pane} expand to shell-quoted values; {pane} is the tmux pane
@@ -81,6 +86,9 @@ type Config struct {
 		Recent int    `toml:"recent"` // max recent sessions to always preview
 		Within string `toml:"within"` // recency window, a Go duration string
 	} `toml:"preview"`
+	Tmux struct {
+		Glyph string `toml:"glyph"` // marker on tmux-attachable sessions; "" hides it
+	} `toml:"tmux"`
 	Commands struct {
 		Enter string `toml:"enter"`
 	} `toml:"commands"`

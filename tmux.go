@@ -6,14 +6,14 @@ import (
 	"strings"
 )
 
-// tmuxPaneFor returns the id of the tmux pane that pid runs in, found by
-// walking pid's ancestor chain until it hits a pane's root process.
-func tmuxPaneFor(pid int) (string, bool) {
+// tmuxPanes maps each pane's root-process pid to its pane id. It is empty
+// when tmux isn't running, so callers degrade to "no pane" cleanly.
+func tmuxPanes() map[int]string {
+	panes := map[int]string{}
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F", "#{pane_pid} #{pane_id}").Output()
 	if err != nil {
-		return "", false
+		return panes
 	}
-	panes := map[int]string{}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		panePID, id, ok := strings.Cut(line, " ")
 		if !ok {
@@ -23,6 +23,12 @@ func tmuxPaneFor(pid int) (string, bool) {
 			panes[n] = id
 		}
 	}
+	return panes
+}
+
+// paneForPID returns the id of the pane pid runs in, found by walking pid's
+// ancestor chain until it hits a pane's root process.
+func paneForPID(pid int, panes map[int]string) (string, bool) {
 	for p := pid; p > 1; p = parentPID(p) {
 		if id, ok := panes[p]; ok {
 			return id, true

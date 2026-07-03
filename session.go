@@ -45,11 +45,18 @@ type Session struct {
 	Size     int64
 	State    SessionState // empty unless Live
 	PID      int          // the running claude process; 0 unless Live
+	Pane     string       // tmux pane id hosting the process; "" if none
 }
 
 // Live reports whether a running claude process is attached to the session.
 func (s Session) Live() bool {
 	return s.PID != 0
+}
+
+// InTmux reports whether the session's process sits in a tmux pane, i.e. the
+// default Enter command can jump to it without attaching a new terminal.
+func (s Session) InTmux() bool {
+	return s.Pane != ""
 }
 
 // Project returns a short display name for the session's working directory.
@@ -316,13 +323,20 @@ type liveInfo struct {
 	PID   int
 }
 
-// markLive attaches the live state reported by running Claude Code processes.
+// markLive attaches the live state reported by running Claude Code processes,
+// and the tmux pane each live process sits in (if any).
 func markLive(sessions []Session) {
 	live := liveStates()
+	panes := tmuxPanes()
 	for i := range sessions {
-		if info, ok := live[sessions[i].ID]; ok {
-			sessions[i].State = info.State
-			sessions[i].PID = info.PID
+		info, ok := live[sessions[i].ID]
+		if !ok {
+			continue
+		}
+		sessions[i].State = info.State
+		sessions[i].PID = info.PID
+		if pane, ok := paneForPID(info.PID, panes); ok {
+			sessions[i].Pane = pane
 		}
 	}
 }
