@@ -80,6 +80,10 @@ type Config struct {
 	Sort struct {
 		Group string `toml:"group"` // "activity" (default) or "repo"
 	} `toml:"sort"`
+	Git struct {
+		Icon   string   `toml:"icon"`   // per-repo glyph; "" hides the column
+		Colors []string `toml:"colors"` // palette cycled per repo; empty uses a built-in one
+	} `toml:"git"`
 	Background bool `toml:"background"` // run key-bound commands detached (no terminal takeover)
 }
 

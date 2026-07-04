@@ -166,6 +166,19 @@ another repo's live session far down the list, whereas `active,repo` surfaces
 every live session first (still grouped by repo) and lets the finished ones sink
 behind all of them.
 
+The `[git]` section adds an optional per-repo coloured glyph before the branch
+column, giving each repo (shared across its worktrees) a consistent colour —
+handy with `[sort] group = "repo"`. The branch name is tinted the same colour,
+so the icon and branch read as one colour-coded unit per repo. Empty (default)
+hides it. A repo's colour is picked by hashing its path, so it stays put across
+runs:
+
+```toml
+[git]
+icon = ""   # a glyph enables it, e.g. "" (nf-fa-git) or "◆"; "" hides it
+# colors = ["2", "3", "4", "5", "6"]   # optional palette; unset = built-in
+```
+
 The `[status]` section sets the per-status marker glyphs. Defaults are Nerd
 Font icons; swap them for plain dots or emoji if your terminal lacks a Nerd
 Font. `running = "spinner"` animates a braille spinner instead of a static

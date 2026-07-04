@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"hash/fnv"
 	"sort"
 	"strconv"
 	"strings"
@@ -126,6 +127,8 @@ type model struct {
 	showWords      bool                              // show the state word next to the glyph
 	dirIcon        string                            // glyph before the project column; "" hides it
 	branchIcon     string                            // glyph before the branch column; "" hides it
+	gitIcon        string                            // per-repo glyph before the branch column; "" hides it
+	repoColors     []lipgloss.TerminalColor          // palette cycled per repo for the git icon
 	dirNameOnly    bool                              // show just the directory name, not the full path
 	selColors      bool                              // keep colours on the cursor row
 	selStatusColor bool                              // keep status marker/word coloured in reverse mode
@@ -207,6 +210,8 @@ func newModel(cfg Config) model {
 		showWords:      cfg.Status.Words,
 		dirIcon:        cfg.Icons.Dir,
 		branchIcon:     cfg.Icons.Branch,
+		gitIcon:        cfg.Git.Icon,
+		repoColors:     repoPalette(cfg.Git.Colors),
 		dirNameOnly:    cfg.Display.Project == "name",
 		selColors:      cfg.Selection.Colors,
 		selStatusColor: cfg.Selection.StatusColor,
@@ -1044,7 +1049,28 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 	}
 	b.WriteString(seg(m.styles.project, iconBody(m.dirIcon, project, colProject)))
 	b.WriteString(gap(2))
-	b.WriteString(seg(m.styles.branch, iconBody(m.branchIcon, s.Branch, colBranch)))
+	// With the git icon on, the icon and the branch text share the repo's
+	// colour, so the whole git area reads as one colour-coded unit per repo.
+	var repoFg lipgloss.TerminalColor
+	if m.gitIcon != "" && s.Repo != "" {
+		repoFg = m.repoColor(s.Repo)
+	}
+	if m.gitIcon != "" {
+		cell := strings.Repeat(" ", lipgloss.Width(m.gitIcon)+1) // reserved, aligned slot
+		st := lipgloss.NewStyle()
+		if s.Repo != "" {
+			cell = m.gitIcon + " "
+			if repoFg != nil {
+				st = st.Foreground(repoFg)
+			}
+		}
+		b.WriteString(seg(st, cell))
+	}
+	branchStyle := m.styles.branch
+	if repoFg != nil {
+		branchStyle = branchStyle.Foreground(repoFg)
+	}
+	b.WriteString(seg(branchStyle, iconBody(m.branchIcon, s.Branch, colBranch)))
 	b.WriteString(gap(2))
 	b.WriteString(seg(lipgloss.NewStyle(), truncPad(s.Pane, colPane)))
 	b.WriteString(gap(2))
@@ -1112,6 +1138,37 @@ func iconBody(icon, text string, w int) string {
 		}
 	}
 	return body
+}
+
+// defaultRepoColors is the built-in palette for the per-repo git icon, used
+// when the config leaves [git] colors unset. It avoids red (reserved for
+// alarming states) and leans on ANSI base colours so it follows the terminal
+// theme like the rest of the columns.
+var defaultRepoColors = []string{"2", "3", "4", "5", "6", "10", "12", "13", "14", "208"}
+
+// repoPalette resolves the configured colour strings (or the built-in palette)
+// into lipgloss colours; a nil result disables the tint.
+func repoPalette(colors []string) []lipgloss.TerminalColor {
+	if len(colors) == 0 {
+		colors = defaultRepoColors
+	}
+	out := make([]lipgloss.TerminalColor, len(colors))
+	for i, c := range colors {
+		out[i] = lipgloss.Color(c)
+	}
+	return out
+}
+
+// repoColor picks a stable palette colour for a repo by hashing its key, so a
+// repo keeps the same colour across runs regardless of index order. Returns nil
+// for a session outside any repo or when no palette is configured.
+func (m model) repoColor(repo string) lipgloss.TerminalColor {
+	if repo == "" || len(m.repoColors) == 0 {
+		return nil
+	}
+	h := fnv.New32a()
+	h.Write([]byte(repo))
+	return m.repoColors[h.Sum32()%uint32(len(m.repoColors))]
 }
 
 // iconCell renders an iconBody with a column style unless plain. Kept as a

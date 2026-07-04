@@ -109,6 +109,21 @@ func TestParseSortDims(t *testing.T) {
 	}
 }
 
+func TestRepoColorStableAndScoped(t *testing.T) {
+	m := model{repoColors: repoPalette(nil)}
+	if c := m.repoColor("A"); c == nil || m.repoColor("A") != c {
+		t.Errorf("repoColor should be non-nil and stable for a repo")
+	}
+	if m.repoColor("") != nil {
+		t.Errorf("repoColor(\"\") should be nil")
+	}
+	// No palette configured -> no tint even for a real repo.
+	none := model{repoColors: nil}
+	if none.repoColor("A") != nil {
+		t.Errorf("repoColor should be nil when no palette is configured")
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

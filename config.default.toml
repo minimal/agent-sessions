@@ -108,6 +108,18 @@ project = "full"
 #   "activity"     (default) newest first, live floated to the top.
 group = "activity"
 
+[git]
+# An optional per-repo coloured glyph, drawn just before the branch column, that
+# gives each git repo (shared across its worktrees) a consistent colour — handy
+# alongside [sort] group = "repo". The branch text is tinted the same colour, so
+# the whole git area reads as one colour-coded unit per repo (overriding
+# [styles.branch] fg while enabled). Empty (default) hides it; set a glyph to
+# enable, e.g. icon = "" (nf-fa-git) or a plain "•".
+icon = ""
+# Palette cycled for that glyph. A repo's colour is picked by hashing its path,
+# so it stays put across runs. Unset uses a built-in theme-following palette.
+# colors = ["2", "3", "4", "5", "6", "10", "12", "13", "14", "208"]
+
 [selection]
 # false (default) draws the cursor row in clean, mutt-style reverse video,
 # which drops the row's colours. true keeps each column's colour and the
