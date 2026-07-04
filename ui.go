@@ -197,7 +197,7 @@ func newModel(cfg Config) model {
 		}
 	}
 	return model{
-		loader:         newLoader(),
+		loader:         newLoader(cfg.SortDims()),
 		styles:         newStyles(cfg),
 		commands:       cfg.Commands,
 		bgExec:         cfg.Background,

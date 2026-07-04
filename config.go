@@ -77,6 +77,9 @@ type Config struct {
 	Tmux struct {
 		Glyph string `toml:"glyph"` // marker on tmux-attachable sessions; "" hides it
 	} `toml:"tmux"`
+	Sort struct {
+		Group string `toml:"group"` // "activity" (default) or "repo"
+	} `toml:"sort"`
 	Background bool `toml:"background"` // run key-bound commands detached (no terminal takeover)
 }
 
@@ -105,6 +108,12 @@ func (c Config) ciOverrides() map[string]string {
 		out[dir] = slug
 	}
 	return out
+}
+
+// SortDims parses the [sort] group setting into the ordered list of dimensions
+// the index is sorted by (most significant first).
+func (c Config) SortDims() []sortDim {
+	return parseSortDims(c.Sort.Group)
 }
 
 // PreviewWithin parses the recency window, falling back to 20m if unset or

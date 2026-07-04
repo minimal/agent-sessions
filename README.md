@@ -146,6 +146,26 @@ token = ""
 "~/Projects/foo" = "gh/acme/foo"
 ```
 
+The `[sort]` section chooses the index order — a comma-separated list of
+dimensions, most significant first. Recency (newest activity, with live
+sessions floated up) is always the final tie-breaker. Two dimensions exist:
+`active` puts live sessions (a running claude process) ahead of the rest, and
+`repo` clusters every session of a git repo — across all its worktrees — into
+one block. Their order is what matters:
+
+```toml
+[sort]
+group = "activity"      # default: newest first, live floated to the top
+# group = "repo"        # whole repos together, live-first inside each block
+# group = "active,repo" # every live session first, grouped by repo, then the rest
+```
+
+Prefer `active,repo` when one busy repo has a large backlog of finished
+sessions: with plain `repo` that backlog sits in the repo's block and can push
+another repo's live session far down the list, whereas `active,repo` surfaces
+every live session first (still grouped by repo) and lets the finished ones sink
+behind all of them.
+
 The `[status]` section sets the per-status marker glyphs. Defaults are Nerd
 Font icons; swap them for plain dots or emoji if your terminal lacks a Nerd
 Font. `running = "spinner"` animates a braille spinner instead of a static

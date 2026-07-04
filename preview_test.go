@@ -147,7 +147,7 @@ func TestScrollShowsCursorAndDetail(t *testing.T) {
 }
 
 func TestRealDataRenders(t *testing.T) {
-	sessions, err := newLoader().Load()
+	sessions, err := newLoader(nil).Load()
 	if err != nil || len(sessions) == 0 {
 		t.Skip("no real sessions available")
 	}

@@ -38,6 +38,7 @@ type Session struct {
 	File     string
 	CWD      string
 	Branch   string
+	Repo     string // git common dir shared by a repo's worktrees; "" if none
 	Slug     string
 	Title    string
 	LastMsg  string    // most recent assistant text, collapsed to one line
@@ -160,11 +161,12 @@ func claudeDir(elem ...string) (string, error) {
 // loader loads sessions, caching parsed transcript metadata between calls so
 // the periodic refresh only re-parses files that actually changed.
 type loader struct {
-	cache map[string]Session // by path; entries hold no live state
+	cache    map[string]Session // by path; entries hold no live state
+	sortDims []sortDim          // index ordering, most significant first
 }
 
-func newLoader() *loader {
-	return &loader{cache: map[string]Session{}}
+func newLoader(sortDims []sortDim) *loader {
+	return &loader{cache: map[string]Session{}, sortDims: sortDims}
 }
 
 // Load scans ~/.claude/projects for session transcripts, newest first, with
@@ -215,18 +217,193 @@ func (ld *loader) Load() ([]Session, error) {
 	}
 	ld.cache = fresh // also drops entries for deleted files
 
-	// Order by last real activity, newest first. Sessions with no timestamped
-	// entries (e.g. mode-only stubs) have a zero Activity and sink to the
-	// bottom; mtime only breaks ties among them.
-	sort.Slice(sessions, func(i, j int) bool {
-		a, b := sessions[i].Activity, sessions[j].Activity
-		if !a.Equal(b) {
-			return a.After(b)
-		}
-		return sessions[i].Modified.After(sessions[j].Modified)
-	})
 	markLive(sessions)
+	repos := map[string]string{} // cwd -> repo key, deduped within this load
+	for i := range sessions {
+		sessions[i].Repo = repoKeyCached(sessions[i].CWD, repos)
+	}
+	sortSessions(sessions, ld.sortDims)
 	return sessions, nil
+}
+
+// sortDim is one dimension of the index ordering. Dimensions are applied in
+// configured order (most significant first), with recency as the final key.
+type sortDim int
+
+const (
+	dimActive sortDim = iota // live sessions (a claude process) ahead of the rest
+	dimRepo                  // cluster sessions of one git repo (across worktrees)
+)
+
+// parseSortDims reads the [sort] group setting: a comma-separated, ordered list
+// of dimension names. Unknown names (including "activity" and "") are ignored,
+// leaving the plain recency order. Duplicates collapse to their first mention.
+func parseSortDims(group string) []sortDim {
+	var dims []sortDim
+	seen := map[sortDim]bool{}
+	for _, tok := range strings.Split(group, ",") {
+		var d sortDim
+		switch strings.TrimSpace(strings.ToLower(tok)) {
+		case "active", "live":
+			d = dimActive
+		case "repo":
+			d = dimRepo
+		default:
+			continue
+		}
+		if !seen[d] {
+			dims = append(dims, d)
+			seen[d] = true
+		}
+	}
+	return dims
+}
+
+// byRecency orders two sessions newest-first: live ahead of the rest, then by
+// last real activity, with mtime breaking ties among the stubs that have none.
+func byRecency(a, b Session) bool {
+	if la, lb := a.Live(), b.Live(); la != lb {
+		return la
+	}
+	if !a.Activity.Equal(b.Activity) {
+		return a.Activity.After(b.Activity)
+	}
+	return a.Modified.After(b.Modified)
+}
+
+// rankRepos assigns each repo a sort position: repos holding a live session
+// first, then by their most recent activity, with the key breaking ties so the
+// order is stable across loads.
+func rankRepos(sessions []Session) map[string]int {
+	type agg struct {
+		hasLive bool
+		newest  time.Time
+	}
+	m := map[string]*agg{}
+	for _, s := range sessions {
+		a := m[s.Repo]
+		if a == nil {
+			a = &agg{}
+			m[s.Repo] = a
+		}
+		a.hasLive = a.hasLive || s.Live()
+		if w := s.When(); w.After(a.newest) {
+			a.newest = w
+		}
+	}
+	repos := make([]string, 0, len(m))
+	for r := range m {
+		repos = append(repos, r)
+	}
+	sort.Slice(repos, func(i, j int) bool {
+		ai, aj := m[repos[i]], m[repos[j]]
+		if ai.hasLive != aj.hasLive {
+			return ai.hasLive
+		}
+		if !ai.newest.Equal(aj.newest) {
+			return ai.newest.After(aj.newest)
+		}
+		return repos[i] < repos[j]
+	})
+	rank := make(map[string]int, len(repos))
+	for i, r := range repos {
+		rank[r] = i
+	}
+	return rank
+}
+
+// sortSessions orders the index by the configured dimensions (most significant
+// first), falling back to recency. dimActive floats live sessions ahead of the
+// rest; dimRepo clusters a repo's sessions (across its worktrees) into a block.
+// The order of the two is what matters: "active,repo" surfaces every live
+// session first and only groups by repo within, so a repo's pile of finished
+// sessions can't bury another repo's live one; "repo" (or "repo,active") keeps
+// whole repos together, live-first inside each block. With no known dimension
+// the plain recency order (live floated to the top) is used.
+func sortSessions(sessions []Session, dims []sortDim) {
+	var repoRank map[string]int
+	for _, d := range dims {
+		if d == dimRepo {
+			repoRank = rankRepos(sessions)
+			break
+		}
+	}
+	sort.Slice(sessions, func(i, j int) bool {
+		si, sj := sessions[i], sessions[j]
+		for _, d := range dims {
+			switch d {
+			case dimActive:
+				if la, lb := si.Live(), sj.Live(); la != lb {
+					return la
+				}
+			case dimRepo:
+				if si.Repo != sj.Repo {
+					return repoRank[si.Repo] < repoRank[sj.Repo]
+				}
+			}
+		}
+		return byRecency(si, sj)
+	})
+}
+
+// repoKeyCached resolves cwd to its repo key, memoising within one load so a
+// directory shared by several sessions is walked only once.
+func repoKeyCached(cwd string, cache map[string]string) string {
+	if cwd == "" {
+		return ""
+	}
+	if k, ok := cache[cwd]; ok {
+		return k
+	}
+	k := repoKey(cwd)
+	cache[cwd] = k
+	return k
+}
+
+// repoKey returns a stable identifier for the git repository containing cwd,
+// shared by all of that repo's worktrees, or "" if cwd is not in a repo. The
+// key is the repo's common git dir, which every linked worktree points back to.
+func repoKey(cwd string) string {
+	dir := cwd
+	for {
+		gitPath := filepath.Join(dir, ".git")
+		if fi, err := os.Stat(gitPath); err == nil {
+			if fi.IsDir() {
+				return filepath.Clean(gitPath) // the main worktree; itself the common dir
+			}
+			return commonGitDir(dir, gitPath) // a linked worktree (or submodule)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "" // reached the filesystem root without finding .git
+		}
+		dir = parent
+	}
+}
+
+// commonGitDir follows a ".git" file (as used by linked worktrees) to the
+// repository's shared common dir, so sibling worktrees resolve to one key.
+func commonGitDir(base, gitFile string) string {
+	data, err := os.ReadFile(gitFile)
+	if err != nil {
+		return ""
+	}
+	gitdir := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(data)), "gitdir:"))
+	if gitdir == "" {
+		return ""
+	}
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(base, gitdir)
+	}
+	// A worktree's gitdir holds a "commondir" pointing at the shared .git.
+	if cd, err := os.ReadFile(filepath.Join(gitdir, "commondir")); err == nil {
+		common := strings.TrimSpace(string(cd))
+		if !filepath.IsAbs(common) {
+			common = filepath.Join(gitdir, common)
+		}
+		return filepath.Clean(common)
+	}
+	return filepath.Clean(gitdir)
 }
 
 // parseTranscript fills metadata by scanning the head of the file (for the
