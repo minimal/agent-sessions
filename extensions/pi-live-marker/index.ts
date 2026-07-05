@@ -43,8 +43,16 @@ function log(ctx: ExtensionContext, message: string): void {
 }
 
 function liveDir(ctx: ExtensionContext): string {
-	const sessionDir = ctx.sessionManager.getSessionDir();
-	return join(sessionDir, "..", "live");
+	// getSessionDir() returns the per-project directory that holds the actual
+	// .jsonl file (e.g. ~/.pi/agent/sessions/--path-encoded-cwd--). The global
+	// session storage root is its grandparent: ~/.pi/agent/sessions. The marker
+	// directory lives next to that root at ~/.pi/agent/live.
+	const sessionFile = ctx.sessionManager.getSessionFile();
+	if (sessionFile) {
+		return join(sessionFile, "..", "..", "..", "live");
+	}
+	// Fallback for in-memory/ephemeral sessions: derive from getSessionDir().
+	return join(ctx.sessionManager.getSessionDir(), "..", "..", "live");
 }
 
 function markerPath(ctx: ExtensionContext): string | undefined {
