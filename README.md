@@ -69,14 +69,17 @@ command (below) and lets `/pi` or `/claude` filter the list.
   `~/.claude/sessions/<pid>.json` (a per-process registry with a real PID, so
   live sessions match to their tmux pane).
 - **pi** — `~/.pi/agent/sessions/<encoded-cwd>/*.jsonl` (or
-  `$PI_CODING_AGENT_SESSION_DIR` / `[sources.pi] session_dir`). pi keeps no
-  live-process registry, so without a marker-writing extension (a future phase,
-  see `ADAPTERS.md`) pi sessions show as offline for status — but the freshest
-  still sorts to the top by activity. The pi process is a normal Linux process
-  (here, a WSL pnpm install on nix node), so a session's tmux pane is found by
-  matching the pane's current path to the session cwd: the tmux glyph marks
-  which pi sessions are in a pane, and `Enter` jumps to that pane. Subject is
-  the first prompt (or a `pi --name` session); git branch is read from the repo.
+  `$PI_CODING_AGENT_SESSION_DIR` / `[sources.pi] session_dir`). pi itself has
+  no live-process registry, but installing the optional
+  `extensions/pi-live-marker/` pi extension writes
+  `~/.pi/agent/live/<sid>.json` with `{pid, pane, cwd, status}` on lifecycle
+  hooks; the TUI then shows pi sessions as live with running/waiting/idle
+  state and jumps to their tmux pane on `Enter`. Without the extension, pi
+  sessions are shown as offline for status — but the freshest still sorts to
+  the top by activity, and a cwd-based pane match still lets `Enter` jump to a
+  pane whose current path equals the session cwd. The pi process is a normal
+  Linux process (here, a WSL pnpm install on nix node). Subject is the first
+  prompt (or a `pi --name` session); git branch is read from the repo.
 
 Enable/disable sources in config:
 
@@ -417,6 +420,24 @@ briefly drops the alt-screen, so the app appears to close and reopen. Set
 terminal — no flash — for commands that only switch a tmux client or focus a
 pane and need no input or output (e.g. `switch-client` plus a focus keystroke
 when you run the app in one split and your sessions in another).
+
+### pi live-state extension
+
+pi has no built-in per-process registry, so by default pi sessions appear
+**offline** in the TUI. Install the bundled `extensions/pi-live-marker/`
+extension to make them live:
+
+```bash
+ln -s "$(pwd)/extensions/pi-live-marker" "$HOME/.pi/agent/extensions/agent-sessions-pi-live"
+```
+
+Then restart pi, or run `/reload` inside it. The extension writes
+`~/.pi/agent/live/<sid>.json` on `session_start`, `agent_start`, `agent_end`,
+and deletes it on `session_shutdown`. The TUI reads these markers to show
+`running`/`waiting`/`idle` state, the process pid, and the tmux pane — and
+jumps to that pane on `Enter`. Without the extension, `Enter` still jumps to a
+pane found by cwd match (best-effort) and falls back to resuming pi in the
+current terminal.
 
 
 ## Tip: a tmux key that jumps to agent-sessions

@@ -1,0 +1,12 @@
+{
+  "name": "agent-sessions-pi-live",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Writes a live marker file for agent-sessions so the TUI can show pi session state, pid, and tmux pane.",
+  "type": "module",
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

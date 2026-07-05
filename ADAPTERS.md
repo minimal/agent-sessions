@@ -161,41 +161,46 @@ just wraps today's functions.
 - Uses the same head/tail byte windows as Claude (`headScanBytes`/`tailScanBytes`)
   — pi transcripts can be large.
 
-### `Live()` (best-effort — see phasing)
+### `Live()` (best-effort without extension, authoritative with it)
 
-**Shipped:** pane match only. `Live()` runs `tmux list-panes -a -F
-'#{pane_id} #{pane_current_path}'` and sets `Pane` on any pi session whose cwd
-equals a pane's current path (skipping agent-sessions' own `$TMUX_PANE` so a
-session sharing our cwd doesn't match our pane). No PID or running/waiting/idle
-state is attached — sessions stay "offline" for status — but the tmux glyph now
-marks which pi sessions are in a pane, and Enter jumps to that pane. The match
-is Linux-side and works because the pi process is a normal Linux process whose
-pane's `pane_current_path` equals the session's launch cwd; first pane wins on
-duplicate cwds. On a pane match Enter jumps to it; otherwise the default
-command falls back to resuming pi in the current terminal.
+**Shipped:** pane match and optional extension-based live state.
 
-The gotoSession guards were decoupled to enable this: `{pane}` is substituted
-empty when there's none (so a template can shell-fallback) rather than
-hard-blocked, while `{pid}` still requires a live session (a PID of 0 is
-meaningless). This is why pi's default command uses `{pane}`/`{cwd}`/`{id}` and
-never `{pid}`.
+When the `agent-sessions-pi-live` extension is installed, `Live()` reads
+`~/.pi/agent/live/<sid>.json` files and sets `PID`, `Pane`, and `State`
+(`running`/`waiting`/`idle`) on matching pi sessions. Sessions with a marker
+become `Live()` and show the live-state glyph/spinner; Enter uses the marker's
+`{pane}`/`{pid}`/`{cwd}`/`{id}`. The extension is in
+`extensions/pi-live-marker/`; install it by copying or symlinking it to
+`~/.pi/agent/extensions/agent-sessions-pi-live/`. It writes markers on
+`session_start`, `agent_start`, `agent_end`, and cleans up on `session_shutdown`.
 
-Phase 2 (not yet done, optional, no extension): infer live *state* from file
-mtime recency — `State = running` if within ~3s (actively streaming) else
-`idle`, live if within ~15s. Deliberately coarse and documented as
-approximate; there's no authoritative signal without a marker file. The pane
-match above is already shipped; this would add the status word/spinner.
+Without the extension, `Live()` falls back to the cwd-based pane match from the
+previous phase: it runs `tmux list-panes -a -F '#{pane_id} #{pane_current_path}'`
+and sets `Pane` on any pi session whose cwd equals a pane's current path
+(skipping agent-sessions' own `$TMUX_PANE` so a session sharing our cwd doesn't
+match our pane). No PID or state is attached, so sessions stay "offline", but
+the tmux glyph still marks which sessions are in a pane and Enter jumps to it.
 
-Phase 3 (authoritative, needs a small pi extension): an extension subscribes to
-pi's `session_start`/`agent_start`/`agent_end`/`session_shutdown` hooks and
-writes a marker file `~/.pi/agent/live/<sid>.json` = `{pid, pane, cwd, status}`
-(cleaned up on shutdown). The pi adapter's `Live()` reads these. This is the
-`skyfallsin/pi-room` pattern (`~/.pi/room/<pane>.json` with `{pane,pid,cwd,
-session,registered}`, using `process.env.TMUX_PANE`) and the `DxVapor/pi-supacode`
-pattern (lifecycle hooks -> status), just writing a file our TUI reads instead
-of Supacode's socket protocol. Feasible here because the active pi is the WSL
-pnpm install (Linux node), so the extension sees `TMUX_PANE` and writes files a
-Linux Go TUI reads. This fixes BOTH pane and live state authoritatively.
+The gotoSession guards were decoupled to support the no-extension case:
+`{pane}` is substituted empty when there's none (so a template can
+shell-fallback) rather than hard-blocked, while `{pid}` still requires a live
+session (a PID of 0 is meaningless). The pi default enter command uses
+`{pane}`/`{cwd}`/`{id}` and falls back to resuming in the current terminal when
+no pane is found.
+
+Phase 2 (mtime heuristic, optional, not implemented): infer live *state* from
+file mtime recency — `State = running` if within ~3s (actively streaming) else
+`idle`, live if within ~15s. Deliberately coarse; the extension is the preferred
+authoritative source. The cwd pane match above is already shipped; the mtime
+heuristic would add only the status word/spinner without an extension.
+
+Phase 3 (authoritative extension): **implemented** as `extensions/pi-live-marker/`.
+It follows the `skyfallsin/pi-room` pattern (`~/.pi/room/<pane>.json` with
+`{pane,pid,cwd,session,registered}`, using `process.env.TMUX_PANE`) and the
+`DxVapor/pi-supacode` pattern (lifecycle hooks -> status), just writing a file
+our TUI reads instead of Supacode's socket protocol. Because the active pi is
+the WSL pnpm install (Linux node), the extension sees `TMUX_PANE` and writes
+files a Linux Go TUI reads, fixing pane and live state authoritatively.
 
 ## Config
 

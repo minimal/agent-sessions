@@ -1,0 +1,183 @@
+package main
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestPiLiveMarker(t *testing.T) {
+	tmp := t.TempDir()
+	sessionsDir := filepath.Join(tmp, "sessions")
+	liveDir := filepath.Join(tmp, "live")
+	if err := os.MkdirAll(liveDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	a := newPiAdapter(sessionsDir)
+
+	// Two pi sessions; only sid-1 has a marker.
+	sessions := []Session{
+		{ID: "sid-1", Source: "pi", CWD: "/home/chris/code/foo"},
+		{ID: "sid-2", Source: "pi", CWD: "/home/chris/code/bar"},
+	}
+
+	marker := piLiveMarker{
+		SID:       "sid-1",
+		PID:       12345,
+		Pane:      "%5",
+		CWD:       "/home/chris/code/foo",
+		Status:    "running",
+		UpdatedAt: time.Now(),
+	}
+	data, _ := json.Marshal(marker)
+	if err := os.WriteFile(filepath.Join(liveDir, "sid-1.json"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	a.Live(sessions)
+
+	if !sessions[0].Live() {
+		t.Errorf("sid-1 should be live")
+	}
+	if sessions[0].PID != 12345 {
+		t.Errorf("sid-1 PID = %d, want 12345", sessions[0].PID)
+	}
+	if sessions[0].Pane != "%5" {
+		t.Errorf("sid-1 Pane = %q, want %%5", sessions[0].Pane)
+	}
+	if sessions[0].State != StateRunning {
+		t.Errorf("sid-1 State = %q, want running", sessions[0].State)
+	}
+
+	if sessions[1].Live() {
+		t.Errorf("sid-2 should not be live")
+	}
+	if sessions[1].Pane != "" {
+		t.Errorf("sid-2 Pane should be empty when there is no cwd match and no tmux")
+	}
+}
+
+func TestPiLiveMarkerFallsBackToTimestampUUID(t *testing.T) {
+	tmp := t.TempDir()
+	sessionsDir := filepath.Join(tmp, "sessions")
+	liveDir := filepath.Join(tmp, "live")
+	if err := os.MkdirAll(liveDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	a := newPiAdapter(sessionsDir)
+
+	// Go id is "<timestamp>_<uuid>" but the extension writes the uuid only.
+	sessions := []Session{{ID: "20260101_abc123", Source: "pi", CWD: "/p"}}
+	marker := piLiveMarker{SID: "abc123", PID: 999, Status: "idle", UpdatedAt: time.Now()}
+	data, _ := json.Marshal(marker)
+	if err := os.WriteFile(filepath.Join(liveDir, "abc123.json"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	a.Live(sessions)
+
+	if !sessions[0].Live() || sessions[0].PID != 999 {
+		t.Errorf("marker should match by uuid suffix: got PID=%d live=%v", sessions[0].PID, sessions[0].Live())
+	}
+}
+
+func TestPiLiveMarkerStaleCleanup(t *testing.T) {
+	tmp := t.TempDir()
+	sessionsDir := filepath.Join(tmp, "sessions")
+	liveDir := filepath.Join(tmp, "live")
+	if err := os.MkdirAll(liveDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	a := newPiAdapter(sessionsDir)
+
+	stale := piLiveMarker{
+		SID:       "orphan",
+		PID:       1,
+		Status:    "running",
+		UpdatedAt: time.Now().Add(-2 * time.Hour),
+	}
+	data, _ := json.Marshal(stale)
+	stalePath := filepath.Join(liveDir, "orphan.json")
+	if err := os.WriteFile(stalePath, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// No sessions at all -> orphan is stale and should be removed.
+	a.Live(nil)
+
+	if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
+		t.Errorf("stale orphan marker should have been deleted")
+	}
+}
+
+func TestPiLiveMarkerPreservesYoungOrphan(t *testing.T) {
+	tmp := t.TempDir()
+	sessionsDir := filepath.Join(tmp, "sessions")
+	liveDir := filepath.Join(tmp, "live")
+	if err := os.MkdirAll(liveDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	a := newPiAdapter(sessionsDir)
+
+	orphan := piLiveMarker{
+		SID:       "fresh",
+		PID:       1,
+		Status:    "running",
+		UpdatedAt: time.Now().Add(-5 * time.Minute),
+	}
+	data, _ := json.Marshal(orphan)
+	orphanPath := filepath.Join(liveDir, "fresh.json")
+	if err := os.WriteFile(orphanPath, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// No matching session, but marker is young -> preserve.
+	a.Live(nil)
+
+	if _, err := os.Stat(orphanPath); os.IsNotExist(err) {
+		t.Errorf("young orphan marker should be preserved")
+	}
+}
+
+func TestPiIDVariants(t *testing.T) {
+	if got := piIDVariants("abc"); len(got) != 1 || got[0] != "abc" {
+		t.Errorf("plain id variants = %v", got)
+	}
+	got := piIDVariants("2026_abc")
+	if len(got) != 2 || got[0] != "2026_abc" || got[1] != "abc" {
+		t.Errorf("timestamp_uuid variants = %v", got)
+	}
+}
+
+func TestParsePiMarkerStatus(t *testing.T) {
+	cases := map[string]SessionState{
+		"running": StateRunning,
+		"waiting": StateWaiting,
+		"idle":    StateIdle,
+		"":        StateUnknown,
+		"boom":    StateUnknown,
+	}
+	for in, want := range cases {
+		if got := parsePiMarkerStatus(in); got != want {
+			t.Errorf("parsePiMarkerStatus(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestPiLiveMarkerISO8601Timestamp(t *testing.T) {
+	// The extension writes new Date().toISOString(). Ensure Go parses it.
+	jsonBlob := []byte(`{"sid":"x","pid":1,"status":"running","updated_at":"2026-07-05T12:34:56.789Z"}`)
+	var m piLiveMarker
+	if err := json.Unmarshal(jsonBlob, &m); err != nil {
+		t.Fatalf("unmarshal ISO8601 marker: %v", err)
+	}
+	if m.UpdatedAt.IsZero() || m.UpdatedAt.Year() != 2026 {
+		t.Errorf("parsed UpdatedAt = %v", m.UpdatedAt)
+	}
+}

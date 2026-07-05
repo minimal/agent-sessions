@@ -82,24 +82,157 @@ func (a *piAdapter) Sessions() ([]Session, error) {
 	return sessions, nil
 }
 
-// Live attaches a best-effort tmux pane to pi sessions by matching the pane's
-// current working directory to the session's launch cwd. pi has no live-process
-// registry, so there's no PID or running/waiting/idle state to attach — sessions
-// stay "offline" for status purposes — but the pane match lets Enter jump to
-// the terminal running pi, and the tmux glyph marks which sessions are in a
-// pane. The pane's current path is a Linux path equal to the session cwd
-// regardless of where the pi process lives, so this works even when a
-// process-tree walk (used by Claude) wouldn't. See ADAPTERS.md for the
-// extension-marker follow-up that would add real live state.
+// piLiveMarker is the JSON file written by the agent-sessions-pi-live pi
+// extension. It provides authoritative live state without requiring a
+// process-tree walk. Fields an older/crashed extension may omit are handled
+// gracefully.
+type piLiveMarker struct {
+	SID       string    `json:"sid"`
+	PID       int       `json:"pid"`
+	Pane      string    `json:"pane"`
+	CWD       string    `json:"cwd"`
+	Status    string    `json:"status"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// liveDir returns ~/.pi/agent/live (or <session_dir>/../live). This is where
+// the agent-sessions-pi-live extension writes marker files.
+func (a *piAdapter) liveDir() string {
+	root := a.root()
+	if root == "" {
+		return ""
+	}
+	return filepath.Join(root, "..", "live")
+}
+
+// readLiveMarkers loads all marker files from the live dir, keyed by sid.
+// Invalid files are skipped silently; the TUI should not break because an
+// extension wrote bad JSON.
+func (a *piAdapter) readLiveMarkers() map[string]piLiveMarker {
+	markers := map[string]piLiveMarker{}
+	dir := a.liveDir()
+	if dir == "" {
+		return markers
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return markers
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var m piLiveMarker
+		if err := json.Unmarshal(data, &m); err != nil {
+			continue
+		}
+		// The filename is the canonical sid; use it if the JSON field is empty
+		// (defensive against older/broken markers).
+		if m.SID == "" {
+			m.SID = strings.TrimSuffix(e.Name(), ".json")
+		}
+		markers[m.SID] = m
+	}
+	return markers
+}
+
+// piIDVariants returns possible marker keys for a session id. The extension
+// uses the session uuid as sid, but Go's fallback id parsing may keep a
+// "<timestamp>_<uuid>" form when the transcript's session line lacks an id.
+func piIDVariants(id string) []string {
+	variants := []string{id}
+	if _, after, ok := strings.Cut(id, "_"); ok && after != "" {
+		variants = append(variants, after)
+	}
+	return variants
+}
+
+// parsePiMarkerStatus maps an extension status string to the shared SessionState
+// vocabulary. Unknown values become StateUnknown rather than empty so the UI
+// still treats the session as live.
+func parsePiMarkerStatus(status string) SessionState {
+	switch status {
+	case "running":
+		return StateRunning
+	case "waiting":
+		return StateWaiting
+	case "idle":
+		return StateIdle
+	default:
+		return StateUnknown
+	}
+}
+
+// Live attaches live state to pi sessions when the agent-sessions-pi-live
+// extension has written marker files. A marker gives us PID, tmux pane, cwd,
+// and status; sessions with a marker become Live() and show the corresponding
+// state. Sessions without a marker fall back to the cwd-based pane match from
+// phase 2, so the TUI stays useful even when the extension isn't installed.
+//
+// Stale markers (no matching session and older than one hour) are cleaned up
+// to recover from pi crashes where session_shutdown didn't run.
 func (a *piAdapter) Live(sessions []Session) {
+	markers := a.readLiveMarkers()
 	panes := tmuxPanesByCWD()
+
+	// Build a set of known session ids, including both the full id and the uuid
+	// suffix. The extension uses the session uuid as sid, but Go's fallback id
+	// parsing may keep a "<timestamp>_<uuid>" form when the session line lacks
+	// an id field.
+	sessionIDs := map[string]bool{}
+	for _, s := range sessions {
+		if s.Source != "pi" {
+			continue
+		}
+		sessionIDs[s.ID] = true
+		if _, after, ok := strings.Cut(s.ID, "_"); ok {
+			sessionIDs[after] = true
+		}
+	}
+
 	for i := range sessions {
 		if sessions[i].Source != "pi" {
 			continue
 		}
-		if pane, ok := tmuxPaneForCWD(sessions[i].CWD, panes); ok {
+
+		// Try the session id, then the uuid suffix, then give up.
+		var marker piLiveMarker
+		var hasMarker bool
+		for _, v := range piIDVariants(sessions[i].ID) {
+			if m, ok := markers[v]; ok {
+				marker = m
+				hasMarker = true
+				break
+			}
+		}
+
+		if hasMarker {
+			sessions[i].PID = marker.PID
+			sessions[i].Pane = marker.Pane
+			sessions[i].State = parsePiMarkerStatus(marker.Status)
+		} else if pane, ok := tmuxPaneForCWD(sessions[i].CWD, panes); ok {
 			sessions[i].Pane = pane
 		}
+	}
+
+	// Clean up markers that have no matching session and are older than an hour.
+	// We preserve young orphans in case a session exists but hasn't been loaded
+	// by the cache yet.
+	const staleThreshold = time.Hour
+	dir := a.liveDir()
+	for sid, marker := range markers {
+		if sessionIDs[sid] {
+			continue
+		}
+		if time.Since(marker.UpdatedAt) < staleThreshold {
+			continue
+		}
+		_ = os.Remove(filepath.Join(dir, sid+".json"))
 	}
 }
 
