@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -105,6 +106,9 @@ func (a *piAdapter) liveDir() string {
 	return filepath.Join(root, "..", "live")
 }
 
+// debugLive reports whether verbose pi live-state diagnostics are enabled.
+func debugLive() bool { return os.Getenv("AGENT_SESSIONS_DEBUG") == "1" }
+
 // readLiveMarkers loads all marker files from the live dir, keyed by sid.
 // Invalid files are skipped silently; the TUI should not break because an
 // extension wrote bad JSON.
@@ -112,11 +116,20 @@ func (a *piAdapter) readLiveMarkers() map[string]piLiveMarker {
 	markers := map[string]piLiveMarker{}
 	dir := a.liveDir()
 	if dir == "" {
+		if debugLive() {
+			fmt.Fprintln(os.Stderr, "[agent-sessions debug] pi liveDir empty")
+		}
 		return markers
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
+		if debugLive() {
+			fmt.Fprintf(os.Stderr, "[agent-sessions debug] pi cannot read live dir %s: %v\n", dir, err)
+		}
 		return markers
+	}
+	if debugLive() {
+		fmt.Fprintf(os.Stderr, "[agent-sessions debug] pi live dir %s has %d entries\n", dir, len(entries))
 	}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
@@ -129,12 +142,19 @@ func (a *piAdapter) readLiveMarkers() map[string]piLiveMarker {
 		}
 		var m piLiveMarker
 		if err := json.Unmarshal(data, &m); err != nil {
+			if debugLive() {
+				fmt.Fprintf(os.Stderr, "[agent-sessions debug] pi failed to parse marker %s: %v\n", path, err)
+			}
 			continue
 		}
 		// The filename is the canonical sid; use it if the JSON field is empty
 		// (defensive against older/broken markers).
 		if m.SID == "" {
 			m.SID = strings.TrimSuffix(e.Name(), ".json")
+		}
+		if debugLive() {
+			fmt.Fprintf(os.Stderr, "[agent-sessions debug] pi read marker sid=%s pid=%d pane=%q status=%s updated=%s\n",
+				m.SID, m.PID, m.Pane, m.Status, m.UpdatedAt.Format(time.RFC3339))
 		}
 		markers[m.SID] = m
 	}
@@ -211,10 +231,19 @@ func (a *piAdapter) Live(sessions []Session) {
 			}
 		}
 
+		if debugLive() {
+			fmt.Fprintf(os.Stderr, "[agent-sessions debug] pi session id=%q cwd=%q hasMarker=%v variants=%v\n",
+				sessions[i].ID, sessions[i].CWD, hasMarker, piIDVariants(sessions[i].ID))
+		}
+
 		if hasMarker {
 			sessions[i].PID = marker.PID
 			sessions[i].Pane = marker.Pane
 			sessions[i].State = parsePiMarkerStatus(marker.Status)
+			if debugLive() {
+				fmt.Fprintf(os.Stderr, "[agent-sessions debug] pi attached live state pid=%d pane=%q state=%s\n",
+					sessions[i].PID, sessions[i].Pane, sessions[i].State)
+			}
 		} else if pane, ok := tmuxPaneForCWD(sessions[i].CWD, panes); ok {
 			sessions[i].Pane = pane
 		}
@@ -230,7 +259,14 @@ func (a *piAdapter) Live(sessions []Session) {
 			continue
 		}
 		if time.Since(marker.UpdatedAt) < staleThreshold {
+			if debugLive() {
+				fmt.Fprintf(os.Stderr, "[agent-sessions debug] pi preserving young orphan marker sid=%s updated=%s\n",
+					sid, marker.UpdatedAt.Format(time.RFC3339))
+			}
 			continue
+		}
+		if debugLive() {
+			fmt.Fprintf(os.Stderr, "[agent-sessions debug] pi removing stale orphan marker sid=%s\n", sid)
 		}
 		_ = os.Remove(filepath.Join(dir, sid+".json"))
 	}
