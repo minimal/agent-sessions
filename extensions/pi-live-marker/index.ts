@@ -31,17 +31,6 @@ interface LiveMarker {
 	updated_at: string;
 }
 
-const DEBUG = process.env.AGENT_SESSIONS_PI_LIVE_DEBUG === "1";
-
-function log(ctx: ExtensionContext, message: string): void {
-	if (!DEBUG) return;
-	// eslint-disable-next-line no-console
-	console.log(`[agent-sessions-pi-live] ${message}`);
-	if (ctx.hasUI) {
-		ctx.ui.notify(`[pi-live] ${message}`, "info");
-	}
-}
-
 function liveDir(ctx: ExtensionContext): string {
 	// getSessionDir() returns the per-project directory that holds the actual
 	// .jsonl file (e.g. ~/.pi/agent/sessions/--path-encoded-cwd--). The global
@@ -63,16 +52,12 @@ function markerPath(ctx: ExtensionContext): string | undefined {
 
 function writeMarker(ctx: ExtensionContext, status: LiveStatus): void {
 	const sid = ctx.sessionManager.getSessionId();
-	if (!sid) {
-		log(ctx, "writeMarker: no session id");
-		return;
-	}
+	if (!sid) return;
 
 	const dir = liveDir(ctx);
 	try {
 		mkdirSync(dir, { recursive: true });
-	} catch (err) {
-		log(ctx, `mkdir failed: ${(err as Error).message}`);
+	} catch {
 		return;
 	}
 
@@ -90,49 +75,35 @@ function writeMarker(ctx: ExtensionContext, status: LiveStatus): void {
 	try {
 		writeFileSync(tmp, JSON.stringify(marker, null, 2));
 		renameSync(tmp, path);
-		log(ctx, `wrote ${path} status=${status}`);
-	} catch (err) {
-		log(ctx, `write failed: ${(err as Error).message}`);
+	} catch {
+		// Best-effort: never let a marker write crash pi.
 	}
 }
 
 function removeMarker(ctx: ExtensionContext): void {
 	const path = markerPath(ctx);
-	if (!path) {
-		log(ctx, "removeMarker: no session id");
-		return;
-	}
+	if (!path) return;
 	try {
 		unlinkSync(path);
-		log(ctx, `removed ${path}`);
 	} catch {
 		// Already gone or unreadable; that's fine.
 	}
 }
 
 export default function (pi: ExtensionAPI) {
-	if (DEBUG) {
-		// eslint-disable-next-line no-console
-		console.log("[agent-sessions-pi-live] extension loaded");
-	}
-
-	pi.on("session_start", async (event, ctx) => {
-		log(ctx, `session_start reason=${event.reason}`);
+	pi.on("session_start", async (_event, ctx) => {
 		writeMarker(ctx, "idle");
 	});
 
 	pi.on("agent_start", async (_event, ctx) => {
-		log(ctx, "agent_start");
 		writeMarker(ctx, "running");
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
-		log(ctx, "agent_end");
 		writeMarker(ctx, "idle");
 	});
 
-	pi.on("session_shutdown", async (event, ctx) => {
-		log(ctx, `session_shutdown reason=${event.reason}`);
+	pi.on("session_shutdown", async (_event, ctx) => {
 		removeMarker(ctx);
 	});
 
@@ -147,8 +118,6 @@ export default function (pi: ExtensionAPI) {
 			if (ctx.hasUI) {
 				ctx.ui.notify(msg, present ? "info" : "error");
 			}
-			// eslint-disable-next-line no-console
-			console.log(`[agent-sessions-pi-live] ${msg}`);
 		},
 	});
 }
