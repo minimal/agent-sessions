@@ -147,6 +147,7 @@ type model struct {
 	sessions       []Session            // what the index shows: all, limited by query/project
 	query          string
 	project        string                  // limit the index to this project cwd; "" is no limit
+	liveOnly       bool                    // limit the index to sessions with a running claude process
 	input          textinput.Model         // line editor backing the search and text prompts
 	searching      bool                    // the search prompt is open and capturing keys
 	unread         map[string]bool         // session IDs that finished a turn unseen
@@ -432,10 +433,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.applyFilter()
 		case "f":
 			m.picker = pickerState{active: true, filter: true, items: m.projectList()}
+		case "o":
+			m.liveOnly = !m.liveOnly
+			m.applyFilter()
 		case "esc":
-			if m.query != "" || m.project != "" {
+			if m.query != "" || m.project != "" || m.liveOnly {
 				m.query = ""
 				m.project = ""
+				m.liveOnly = false
 				m.applyFilter()
 			}
 		case "j", "down":
@@ -672,9 +677,12 @@ func (m *model) applyFilter() {
 		selectedID = m.sessions[m.cursor].ID
 	}
 	m.sessions = m.all
-	if q := strings.ToLower(m.query); q != "" || m.project != "" {
+	if q := strings.ToLower(m.query); q != "" || m.project != "" || m.liveOnly {
 		m.sessions = nil
 		for _, s := range m.all {
+			if m.liveOnly && !s.Live() {
+				continue
+			}
 			if m.project != "" && s.CWD != m.project {
 				continue
 			}
@@ -707,6 +715,9 @@ func (m *model) applyFilter() {
 	}
 	if m.project != "" {
 		parts = append(parts, "project "+displayPath(m.project))
+	}
+	if m.liveOnly {
+		parts = append(parts, "running only")
 	}
 	m.status = strings.Join(parts, ", ")
 }
@@ -849,9 +860,9 @@ func (m model) View() string {
 		return m.pickerView()
 	}
 
-	help := "q:Quit  j/k:Move  Enter:Go  /:Search  f:Filter  r:Refresh  ?:Help"
-	if m.query != "" || m.project != "" {
-		help = "q:Quit  j/k:Move  Enter:Go  /:Search  f:Filter  Esc:Clear filter  r:Refresh  ?:Help"
+	help := "q:Quit  j/k:Move  Enter:Go  /:Search  f:Filter  o:Running  r:Refresh  ?:Help"
+	if m.query != "" || m.project != "" || m.liveOnly {
+		help = "q:Quit  j/k:Move  Enter:Go  /:Search  f:Filter  o:Running  Esc:Clear filter  r:Refresh  ?:Help"
 	}
 	var b strings.Builder
 	b.WriteString(m.styles.bar.Render(pad(help, m.width)))
@@ -935,6 +946,7 @@ func (m model) helpView() string {
 		"    g / G              first / last session",
 		"    /                  search; Enter keeps the filter, Esc clears it",
 		"    f                  filter the list to one project (opens the picker)",
+		"    o                  toggle showing only sessions with a running claude process",
 		"    d                  delete session (transcript + sidecar files; asks y/n)",
 		"    r                  refresh now",
 		"    ?                  this help",
