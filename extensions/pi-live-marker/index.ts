@@ -12,8 +12,16 @@
  * Lifecycle:
  *   session_start  -> status "idle"
  *   agent_start    -> status "running"
+ *   message_end (assistant) -> status "waiting"
+ *     (the LLM just stopped; if a tool is about to run, tool_execution_start
+ *      flips it back to "running")
+ *   tool_execution_start    -> status "running" + start isIdle() poll
+ *     (while a tool runs, every 1.5s: isIdle() ? "waiting" : "running", so a
+ *      custom tool that awaits ctx.ui.confirm/input for the user shows as
+ *      "waiting" instead of "running")
+ *   tool_execution_end      -> stop poll
  *   agent_end      -> status "idle"
- *   session_shutdown -> delete marker
+ *   session_shutdown -> stop poll, delete marker
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -90,6 +98,44 @@ function removeMarker(ctx: ExtensionContext): void {
 	}
 }
 
+// isIdle() distinguishes a tool that's actively working from one that's
+// blocked on user input. When a custom tool (e.g. an ask-user-questions tool
+// the LLM called) awaits ctx.ui.confirm/input/select, the LLM is no longer
+// streaming, so isIdle() is true even though tool_execution_start has fired
+// and tool_execution_end hasn't. We poll isIdle() during tool execution so
+// permission prompts (handled by the gap before tool_execution_start) and
+// in-tool user prompts both surface as "waiting".
+let inTool = false;
+let pollTimer: ReturnType<typeof setInterval> | undefined;
+let pollCtx: ExtensionContext | undefined;
+
+function startPoll(ctx: ExtensionContext): void {
+	stopPoll();
+	pollCtx = ctx;
+	// Small delay before the first poll so a tool that's about to start
+	// working doesn't briefly read isIdle()=true during its async setup.
+	setTimeout(() => {
+		if (!inTool || !pollCtx) return;
+		pollTimer = setInterval(() => {
+			if (!inTool || !pollCtx) return;
+			try {
+				writeMarker(pollCtx, pollCtx.isIdle() ? "waiting" : "running");
+			} catch {
+				// ctx became stale (session replaced/reloaded); stop polling.
+				stopPoll();
+			}
+		}, 1500);
+	}, 800);
+}
+
+function stopPoll(): void {
+	if (pollTimer) {
+		clearInterval(pollTimer);
+		pollTimer = undefined;
+	}
+	pollCtx = undefined;
+}
+
 export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		writeMarker(ctx, "idle");
@@ -114,7 +160,14 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("tool_execution_start", async (_event, ctx) => {
+		inTool = true;
 		writeMarker(ctx, "running");
+		startPoll(ctx);
+	});
+
+	pi.on("tool_execution_end", async (_event, _ctx) => {
+		inTool = false;
+		stopPoll();
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
@@ -122,6 +175,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		stopPoll();
 		removeMarker(ctx);
 	});
 
