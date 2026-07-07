@@ -170,6 +170,21 @@ within = "20m"  # ...modified within this window (a Go duration)
 # ones the default Enter command can jump to. Set to "" to hide it.
 glyph = "⊟"
 
+[mouse]
+# Off by default. When enabled the app captures mouse events, which means the
+# terminal (and tmux) hand ALL mouse input to the app: your terminal's own
+# text selection, scrollback and tmux mouse mode stop working while it runs.
+# In most terminals you can hold Shift (Option in some macOS terminals) to
+# bypass this and select/copy text normally. Leave it off to keep tmux mouse
+# behaviour untouched.
+enabled = false
+# When enabled, how a left click on a session row behaves:
+#   "select"        (default) a single click selects the row; double-click
+#                   switches to it (runs the enter command).
+#   "select-switch" a single click selects the row and switches at once.
+# The scroll wheel always moves the selection.
+click_action = "select"
+
 [commands]
 # Shell commands bound to keys, run on the selected session. Keys are
 # Bubble Tea key names: single characters ("o", "D"), "enter", or combos

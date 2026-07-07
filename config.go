@@ -44,7 +44,7 @@ type Config struct {
 		Token    string            `toml:"token"`
 		Projects map[string]string `toml:"projects"`
 	} `toml:"circleci"`
-	Icons    struct {
+	Icons struct {
 		Branch string `toml:"branch"` // shown before the branch; "" hides it
 		Dir    string `toml:"dir"`    // shown before the directory; "" hides it
 	} `toml:"icons"`
@@ -77,6 +77,10 @@ type Config struct {
 	Tmux struct {
 		Glyph string `toml:"glyph"` // marker on tmux-attachable sessions; "" hides it
 	} `toml:"tmux"`
+	Mouse struct {
+		Enabled     bool   `toml:"enabled"`      // capture mouse events at all
+		ClickAction string `toml:"click_action"` // "select" or "select-switch"
+	} `toml:"mouse"`
 	Sort struct {
 		Group string `toml:"group"` // "activity" (default) or "repo"
 	} `toml:"sort"`
