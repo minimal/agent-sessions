@@ -15,13 +15,27 @@
  *   message_end (assistant) -> status "waiting"
  *     (the LLM just stopped; if a tool is about to run, tool_execution_start
  *      flips it back to "running")
- *   tool_execution_start    -> status "running" + start isIdle() poll
- *     (while a tool runs, every 1.5s: isIdle() ? "waiting" : "running", so a
- *      custom tool that awaits ctx.ui.confirm/input for the user shows as
- *      "waiting" instead of "running")
- *   tool_execution_end      -> stop poll
+ *   tool_execution_start    -> status "running" + start poll
+ *     (while a tool runs, every 1.5s: if a <sid>.waiting flag is present
+ *      -> "waiting"; else isIdle() ? "waiting" : "running". The flag is set
+ *      by cooperating prompting extensions so the user-input window is
+ *      visible even though isIdle() stays false while a tool awaits
+ *      ctx.ui.confirm/input/select.)
+ *   tool_execution_end      -> stop poll, clear stale waiting flag
  *   agent_end      -> status "idle"
  *   session_shutdown -> stop poll, delete marker
+ *
+ * Cooperation protocol (for prompting extensions like ask-user-questions
+ * or a cloned permissions extension):
+ *   const sid = ctx.sessionManager.getSessionId();
+ *   const sessionFile = ctx.sessionManager.getSessionFile();
+ *   const liveDir = join(sessionFile, "..", "..", "..", "live");
+ *   const flag = join(liveDir, `${sid}.waiting`);
+ *   // before:
+ *   writeFileSync(flag, "");
+ *   const answer = await ctx.ui.confirm("Title", "Allow?");
+ *   // after:
+ *   try { unlinkSync(flag); } catch {}
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -114,16 +128,26 @@ function removeMarker(ctx: ExtensionContext): void {
 	}
 }
 
-// isIdle() distinguishes a tool that's actively working from one that's
-// blocked on user input. When a custom tool (e.g. an ask-user-questions tool
-// the LLM called) awaits ctx.ui.confirm/input/select, the LLM is no longer
-// streaming, so isIdle() is true even though tool_execution_start has fired
-// and tool_execution_end hasn't. We poll isIdle() during tool execution so
-// permission prompts (handled by the gap before tool_execution_start) and
-// in-tool user prompts both surface as "waiting".
-let inTool = false;
+// During tool execution we poll every 1.5s to distinguish a tool that's
+// actively working from one that's blocked on user input. isIdle() alone is
+// not enough: it stays false while a custom tool awaits ctx.ui.confirm/
+// input/select (verified: isIdle()=false during the ask-user-questions
+// prompt). So we cooperate: any prompting extension can create a sidecar
+// flag file <liveDir>/<sid>.waiting before showing a prompt, and delete it
+// after the user responds. When the flag is present, the poll forces
+// "waiting" regardless of isIdle(). When it's absent, we fall back to
+// isIdle() (true -> "waiting" for the tool's own setup gap; false ->
+// "running"). On the last tool_execution_end we unlink the flag as
+// defensive cleanup in case the cooperating extension crashed.
+let toolCount = 0;
 let pollTimer: ReturnType<typeof setInterval> | undefined;
 let pollCtx: ExtensionContext | undefined;
+
+function waitingFlagPath(ctx: ExtensionContext): string | undefined {
+	const sid = ctx.sessionManager.getSessionId();
+	if (!sid) return undefined;
+	return join(liveDir(ctx), `${sid}.waiting`);
+}
 
 function startPoll(ctx: ExtensionContext): void {
 	stopPoll();
@@ -132,17 +156,22 @@ function startPoll(ctx: ExtensionContext): void {
 	// Small delay before the first poll so a tool that's about to start
 	// working doesn't briefly read isIdle()=true during its async setup.
 	setTimeout(() => {
-		if (!inTool || !pollCtx) return;
+		if (toolCount === 0 || !pollCtx) return;
 		debug(pollCtx, "poll: first tick");
 		pollTimer = setInterval(() => {
-			if (!inTool || !pollCtx) return;
+			if (toolCount === 0 || !pollCtx) return;
 			try {
-				const idle = pollCtx.isIdle();
-				debug(pollCtx, `poll: isIdle()=${idle}`);
-				writeMarker(pollCtx, idle ? "waiting" : "running");
+				const flag = waitingFlagPath(pollCtx);
+				if (flag && existsSync(flag)) {
+					debug(pollCtx, "poll: waiting flag present -> waiting");
+					writeMarker(pollCtx, "waiting");
+				} else {
+					const idle = pollCtx.isIdle();
+					debug(pollCtx, `poll: isIdle()=${idle}`);
+					writeMarker(pollCtx, idle ? "waiting" : "running");
+				}
 			} catch (err) {
 				debug(pollCtx, `poll error: ${(err as Error).message}`);
-				// ctx became stale (session replaced/reloaded); stop polling.
 				stopPoll();
 			}
 		}, 1500);
@@ -182,16 +211,27 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("tool_execution_start", async (event, ctx) => {
-		inTool = true;
-		debug(ctx, `tool_execution_start id=${event.toolCallId} name=${event.toolName}`);
-		writeMarker(ctx, "running");
-		startPoll(ctx);
+		toolCount++;
+		debug(ctx, `tool_execution_start id=${event.toolCallId} name=${event.toolName} count=${toolCount}`);
+		if (toolCount === 1) {
+			writeMarker(ctx, "running");
+			startPoll(ctx);
+		}
 	});
 
 	pi.on("tool_execution_end", async (event, ctx) => {
-		debug(ctx, `tool_execution_end id=${event.toolCallId} name=${event.toolName} isError=${event.isError}`);
-		inTool = false;
-		stopPoll();
+		debug(ctx, `tool_execution_end id=${event.toolCallId} name=${event.toolName} isError=${event.isError} count=${toolCount}`);
+		toolCount = Math.max(0, toolCount - 1);
+		if (toolCount === 0) {
+			stopPoll();
+			// Defensive: a cooperating extension may have left the flag behind
+			// if it crashed mid-prompt. Clear it so a future tool run doesn't
+			// inherit a stale "waiting".
+			const flag = waitingFlagPath(ctx);
+			if (flag) {
+				try { unlinkSync(flag); } catch {}
+			}
+		}
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
@@ -225,7 +265,9 @@ export default function (pi: ExtensionAPI) {
 			const idle = (() => {
 				try { return ctx.isIdle(); } catch { return "ctx-stale"; }
 			})();
-			const msg = `inTool=${inTool} pollActive=${pollTimer !== undefined} isIdle()=${idle} marker=${present ? "present" : "missing"} lastWritten=${lastWrittenStatus ?? "none"}`;
+			const flag = waitingFlagPath(ctx);
+			const flagPresent = flag ? existsSync(flag) : false;
+			const msg = `toolCount=${toolCount} pollActive=${pollTimer !== undefined} isIdle()=${idle} waitingFlag=${flagPresent} marker=${present ? "present" : "missing"} lastWritten=${lastWrittenStatus ?? "none"}`;
 			if (ctx.hasUI) {
 				ctx.ui.notify(msg, "info");
 			}

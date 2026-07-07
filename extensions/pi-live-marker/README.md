@@ -52,16 +52,72 @@ loads TypeScript extensions directly via jiti.
 |-------------------|---------------|----------|
 | `session_start`   | write         | `idle`   |
 | `agent_start`     | write         | `running`|
+| `message_end` (assistant) | write | `waiting` |
+| `tool_execution_start` | write    | `running` (+ start poll) |
+| `tool_execution_end`   | (poll stops; stale waiting flag cleared) | |
 | `agent_end`       | write         | `idle`   |
 | `session_shutdown`| delete        | —        |
+
+While a tool is executing, the extension polls every 1.5s and writes the
+status based on:
+
+1. A sidecar flag file `<liveDir>/<sid>.waiting` (see Cooperation protocol
+   below) — if present, `waiting`.
+2. Otherwise `ctx.isIdle()` — `true` → `waiting`, `false` → `running`.
 
 Markers are written atomically (temp file + rename) so `agent-sessions` never
 reads a half-written file.
 
 ## Status values
 
-- `running` — pi is generating a response for this session.
-- `waiting` — reserved for future permission-prompt states.
-- `idle` — pi is waiting for the next prompt.
+- `running` — pi is generating a response, or a tool is actively working.
+- `waiting` — the agent is blocked on the user (a permission prompt or a
+  cooperating extension's UI prompt).
+- `idle` — pi is waiting for the next user prompt.
 
 `agent-sessions` maps these to its own `running` / `waiting` / `idle` states.
+
+## Cooperation protocol (for prompting extensions)
+
+The pi extension API has no generic "the user is being prompted" event.
+`ctx.isIdle()` stays `false` while a custom tool awaits `ctx.ui.confirm` /
+`input` / `select` / `custom` (verified — see [earendil-works/pi#5329]),
+so a polling isIdle() heuristic cannot distinguish "tool working" from
+"tool blocked on a UI promise" on its own.
+
+To fix that for a specific extension, the extension can create a sidecar
+**waiting flag** before showing a prompt and delete it after. The
+agent-sessions-pi-live poll will force `waiting` whenever the flag is
+present, regardless of isIdle().
+
+In your extension, wrap any `ctx.ui.*` prompt with:
+
+```typescript
+import { writeFileSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
+
+const sid = ctx.sessionManager.getSessionId();
+const sessionFile = ctx.sessionManager.getSessionFile();
+if (sid && sessionFile) {
+	const liveDir = join(sessionFile, "..", "..", "..", "live");
+	const flag = join(liveDir, `${sid}.waiting`);
+
+	// Before showing the prompt:
+	writeFileSync(flag, "");
+
+	// Show the prompt (await the user):
+	const answer = await ctx.ui.confirm("Title", "Allow this?");
+
+	// After the user responds (always, even on rejection):
+	try { unlinkSync(flag); } catch {}
+}
+```
+
+The path is the marker directory's sibling: `~/.pi/agent/live/`. The flag
+filename is the session uuid with a `.waiting` suffix. `agent-sessions-pi-live`
+also defensively removes the flag when the last `tool_execution_end` fires,
+in case your extension crashes mid-prompt.
+
+This is what we use to make the bundled
+[`examples/extensions/question.ts`](https://github.com/earendil-works/pi-mono/tree/main/examples/extensions)
+and a cloned permissions extension show `waiting` while the prompt is up.
