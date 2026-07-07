@@ -39,6 +39,18 @@ interface LiveMarker {
 	updated_at: string;
 }
 
+const DEBUG = process.env.AGENT_SESSIONS_PI_LIVE_DEBUG === "1";
+let lastWrittenStatus: LiveStatus | undefined;
+
+function debug(ctx: ExtensionContext | undefined, message: string): void {
+	if (!DEBUG) return;
+	// eslint-disable-next-line no-console
+	console.log(`[agent-sessions-pi-live] ${message}`);
+	if (ctx?.hasUI) {
+		ctx.ui.notify(`[pi-live] ${message}`, "info");
+	}
+}
+
 function liveDir(ctx: ExtensionContext): string {
 	// getSessionDir() returns the per-project directory that holds the actual
 	// .jsonl file (e.g. ~/.pi/agent/sessions/--path-encoded-cwd--). The global
@@ -83,6 +95,10 @@ function writeMarker(ctx: ExtensionContext, status: LiveStatus): void {
 	try {
 		writeFileSync(tmp, JSON.stringify(marker, null, 2));
 		renameSync(tmp, path);
+		if (DEBUG && status !== lastWrittenStatus) {
+			debug(ctx, `marker status: ${status}`);
+			lastWrittenStatus = status;
+		}
 	} catch {
 		// Best-effort: never let a marker write crash pi.
 	}
@@ -112,15 +128,20 @@ let pollCtx: ExtensionContext | undefined;
 function startPoll(ctx: ExtensionContext): void {
 	stopPoll();
 	pollCtx = ctx;
+	debug(ctx, "startPoll (tool_execution_start)");
 	// Small delay before the first poll so a tool that's about to start
 	// working doesn't briefly read isIdle()=true during its async setup.
 	setTimeout(() => {
 		if (!inTool || !pollCtx) return;
+		debug(pollCtx, "poll: first tick");
 		pollTimer = setInterval(() => {
 			if (!inTool || !pollCtx) return;
 			try {
-				writeMarker(pollCtx, pollCtx.isIdle() ? "waiting" : "running");
-			} catch {
+				const idle = pollCtx.isIdle();
+				debug(pollCtx, `poll: isIdle()=${idle}`);
+				writeMarker(pollCtx, idle ? "waiting" : "running");
+			} catch (err) {
+				debug(pollCtx, `poll error: ${(err as Error).message}`);
 				// ctx became stale (session replaced/reloaded); stop polling.
 				stopPoll();
 			}
@@ -156,16 +177,19 @@ export default function (pi: ExtensionAPI) {
 	// marker correctly shows "waiting".
 	pi.on("message_end", async (event, ctx) => {
 		if (event.message?.role !== "assistant") return;
+		debug(ctx, "message_end (assistant) -> waiting");
 		writeMarker(ctx, "waiting");
 	});
 
-	pi.on("tool_execution_start", async (_event, ctx) => {
+	pi.on("tool_execution_start", async (event, ctx) => {
 		inTool = true;
+		debug(ctx, `tool_execution_start id=${event.toolCallId} name=${event.toolName}`);
 		writeMarker(ctx, "running");
 		startPoll(ctx);
 	});
 
-	pi.on("tool_execution_end", async (_event, _ctx) => {
+	pi.on("tool_execution_end", async (event, ctx) => {
+		debug(ctx, `tool_execution_end id=${event.toolCallId} name=${event.toolName} isError=${event.isError}`);
 		inTool = false;
 		stopPoll();
 	});
@@ -189,6 +213,21 @@ export default function (pi: ExtensionAPI) {
 			const msg = `sid=${sid ?? "(none)"} dir=${dir} marker=${present ? "present" : "missing"}`;
 			if (ctx.hasUI) {
 				ctx.ui.notify(msg, present ? "info" : "error");
+			}
+		},
+	});
+
+	pi.registerCommand("pi-live-debug", {
+		description: "Show agent-sessions-pi-live internal state",
+		handler: async (_args, ctx) => {
+			const path = markerPath(ctx);
+			const present = path ? existsSync(path) : false;
+			const idle = (() => {
+				try { return ctx.isIdle(); } catch { return "ctx-stale"; }
+			})();
+			const msg = `inTool=${inTool} pollActive=${pollTimer !== undefined} isIdle()=${idle} marker=${present ? "present" : "missing"} lastWritten=${lastWrittenStatus ?? "none"}`;
+			if (ctx.hasUI) {
+				ctx.ui.notify(msg, "info");
 			}
 		},
 	});
