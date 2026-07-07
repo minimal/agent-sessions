@@ -99,23 +99,22 @@ export default function (pi: ExtensionAPI) {
 		writeMarker(ctx, "running");
 	});
 
-	// message_start/message_end give finer-grained state than agent_*:
-	// assistant message_end fires when the LLM stops streaming, which is
-	// exactly when the agent enters a non-streaming state — either executing a
-	// tool, blocked on a permission prompt, or waiting on another extension's
-	// confirm/input/select UI. We surface that whole window as "waiting" so the
-	// TUI catches permission prompts and ask-user extensions (which the
-	// agent_*-only mapping missed). The trade-off: tool execution also shows as
-	// "waiting" until the next assistant message_start flips it back to
-	// "running", which is usually brief.
-	pi.on("message_start", async (event, ctx) => {
-		if (event.message?.role !== "assistant") return;
-		writeMarker(ctx, "running");
-	});
-
+	// When the LLM stops streaming (assistant message_end), the agent enters
+	// a non-streaming window. The next event distinguishes the two cases:
+	//   - tool_execution_start fires -> the tool is actually running -> "running"
+	//   - no tool fires (permission prompt, another extension's confirm/input,
+	//     or the turn is ending) -> stays "waiting"
+	// This is the closest the extension API gets to "blocked on the user":
+	// pi's built-in permission prompt holds the tool back, so
+	// tool_execution_start does NOT fire while the prompt is up, and the
+	// marker correctly shows "waiting".
 	pi.on("message_end", async (event, ctx) => {
 		if (event.message?.role !== "assistant") return;
 		writeMarker(ctx, "waiting");
+	});
+
+	pi.on("tool_execution_start", async (_event, ctx) => {
+		writeMarker(ctx, "running");
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
