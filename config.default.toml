@@ -233,7 +233,10 @@ enabled = true
 [sources.pi]
 enabled = true
 # session_dir = ""   # override; empty = $PI_CODING_AGENT_SESSION_DIR or ~/.pi/agent/sessions
-# enter = "tmux select-pane -t {pane} && tmux select-window -t {pane} && tmux switch-client -t {pane} 2>/dev/null || (cd {cwd} && pi --session {id})"   # jump to pi's pane (authoritative with the agent-sessions-pi-live extension, else cwd-match), else resume in current terminal
+# Jump to pi's pane (authoritative with the agent-sessions-pi-live extension,
+# else cwd-match), or resume the session in the current terminal if it has no
+# visible tmux pane.
+enter = "tmux select-pane -t {pane} && tmux select-window -t {pane} && tmux switch-client -t {pane} 2>/dev/null || (cd {cwd} && pi --session {id})"
 
 # --- Catppuccin Mocha example -------------------------------------------------
 # The ANSI-base defaults above already follow your terminal theme. To pin exact

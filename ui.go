@@ -485,6 +485,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// piEnterBuiltin is the default resume/jump command for pi sessions. It is
+// used when the user has no per-source [sources.pi]enter override configured,
+// protecting older configs that predate the override from falling through to
+// the Claude-oriented global enter template.
+const piEnterBuiltin = `tmux select-pane -t {pane} && tmux select-window -t {pane} && tmux switch-client -t {pane} 2>/dev/null || (cd {cwd} && pi --session {id})`
+
+// sourceEnterTemplate resolves the command template for a session's source.
+// Per-source overrides win; pi sessions without one fall back to the pi-
+// specific built-in instead of the Claude-oriented global default.
+func sourceEnterTemplate(source, global string, overrides map[string]string) string {
+	if cmd, ok := overrides[source]; ok && cmd != "" {
+		return cmd
+	}
+	if source == "pi" {
+		return piEnterBuiltin
+	}
+	return global
+}
+
 // runCommand runs a command template for the selected session, handing it
 // the terminal so interactive commands (tmux attach, editors) work.
 // Templates using {pane} or {pid} need a live session ({pane} additionally
@@ -495,9 +514,7 @@ func (m model) runCommand(tmpl string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	s := m.sessions[m.cursor]
-	if cmd, ok := m.enterBySource[s.Source]; ok && cmd != "" {
-		tmpl = cmd // a source-specific override (e.g. pi --session) wins
-	}
+	tmpl = sourceEnterTemplate(s.Source, tmpl, m.enterBySource)
 	vars := map[string]string{
 		"id":    s.ID,
 		"pid":   strconv.Itoa(s.PID),

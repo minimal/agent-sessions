@@ -608,3 +608,60 @@ func TestEnterPidBlockedWithoutLive(t *testing.T) {
 		t.Error("a {pid} template on a non-live session should be blocked with a notice")
 	}
 }
+
+// TestDefaultConfigPiEnterOverride verifies the shipped default config
+// provides a [sources.pi]enter override and that newModel picks it up.
+func TestDefaultConfigPiEnterOverride(t *testing.T) {
+	var cfg Config
+	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(cfg.Sources.Pi.Enter, "pi --session") {
+		t.Errorf("default [sources.pi]enter should resume pi, got: %s", cfg.Sources.Pi.Enter)
+	}
+	if strings.Contains(cfg.Sources.Pi.Enter, "claude --resume") {
+		t.Errorf("default [sources.pi]enter should not mention claude --resume: %s", cfg.Sources.Pi.Enter)
+	}
+	m := newModel(cfg)
+	if got := m.enterBySource["pi"]; got != cfg.Sources.Pi.Enter {
+		t.Errorf("newModel did not populate enterBySource[pi], got %q", got)
+	}
+}
+
+// TestSourceEnterTemplate checks that per-source overrides win, unknown
+// sources keep the global template, and pi sessions without an override fall
+// back to the pi-specific built-in instead of the global claude template.
+func TestSourceEnterTemplate(t *testing.T) {
+	overrides := map[string]string{"pi": "pi-override"}
+	if got := sourceEnterTemplate("pi", "global", overrides); got != "pi-override" {
+		t.Errorf("per-source override should win, got %q", got)
+	}
+	if got := sourceEnterTemplate("claude", "global", overrides); got != "global" {
+		t.Errorf("claude should keep global template, got %q", got)
+	}
+	if got := sourceEnterTemplate("pi", "global", map[string]string{}); got != piEnterBuiltin {
+		t.Errorf("pi without override should use built-in fallback, got %q", got)
+	}
+}
+
+// TestPiEnterBuiltinNoClaudeResume renders the pi fallback for a session
+// with no tmux pane and confirms it does not silently run claude --resume.
+func TestPiEnterBuiltinNoClaudeResume(t *testing.T) {
+	vars := map[string]string{
+		"id":    "pi-uuid",
+		"cwd":   "/tmp/proj",
+		"pane":  "",
+		"pane?": "",
+		"pid":   "0",
+		"pid?":  "",
+		"file":  "/tmp/proj/pi-uuid.jsonl",
+		"state": string(StateIdle),
+	}
+	line := expandCommand(sourceEnterTemplate("pi", "global", map[string]string{}), vars)
+	if strings.Contains(line, "claude --resume") {
+		t.Errorf("pi enter rendered with claude --resume: %s", line)
+	}
+	if !strings.Contains(line, "pi --session") {
+		t.Errorf("pi enter should resume pi, got: %s", line)
+	}
+}
