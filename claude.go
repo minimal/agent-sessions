@@ -68,7 +68,8 @@ func (a *claudeAdapter) Sessions() ([]Session, error) {
 // sources like pi whose process model hides the PID.
 func (a *claudeAdapter) Live(sessions []Session) {
 	live := liveStates()
-	panes := tmuxPanes() // map[int]paneInfo; nil if tmux isn't running
+	var panes map[int]paneInfo
+	loaded := false
 	for i := range sessions {
 		if sessions[i].Source != "claude" {
 			continue
@@ -79,6 +80,9 @@ func (a *claudeAdapter) Live(sessions []Session) {
 		}
 		sessions[i].State = info.State
 		sessions[i].PID = info.PID
+		if !loaded {
+			panes, loaded = tmuxPanes(), true
+		}
 		if p, ok := paneFor(panes, info.PID); ok {
 			sessions[i].Pane = p.Name // session:window.pane, the format runCommand expects
 		}
