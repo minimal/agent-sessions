@@ -140,6 +140,7 @@ function removeMarker(ctx: ExtensionContext): void {
 // "running"). On the last tool_execution_end we unlink the flag as
 // defensive cleanup in case the cooperating extension crashed.
 let toolCount = 0;
+let pollDelay: ReturnType<typeof setTimeout> | undefined;
 let pollTimer: ReturnType<typeof setInterval> | undefined;
 let pollCtx: ExtensionContext | undefined;
 
@@ -155,7 +156,8 @@ function startPoll(ctx: ExtensionContext): void {
 	debug(ctx, "startPoll (tool_execution_start)");
 	// Small delay before the first poll so a tool that's about to start
 	// working doesn't briefly read isIdle()=true during its async setup.
-	setTimeout(() => {
+	pollDelay = setTimeout(() => {
+		pollDelay = undefined;
 		if (toolCount === 0 || !pollCtx) return;
 		debug(pollCtx, "poll: first tick");
 		pollTimer = setInterval(() => {
@@ -179,6 +181,10 @@ function startPoll(ctx: ExtensionContext): void {
 }
 
 function stopPoll(): void {
+	if (pollDelay) {
+		clearTimeout(pollDelay);
+		pollDelay = undefined;
+	}
 	if (pollTimer) {
 		clearInterval(pollTimer);
 		pollTimer = undefined;
