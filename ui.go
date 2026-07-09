@@ -204,6 +204,7 @@ func newModel(cfg Config) model {
 		loader:         newLoader(cfg.SortDims()),
 		styles:         newStyles(cfg),
 		commands:       cfg.Commands,
+		liveOnly:       cfg.Filter.Running,
 		bgExec:         cfg.Background,
 		tmuxGlyph:      cfg.Tmux.Glyph,
 		glyphs:         glyphs,

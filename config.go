@@ -80,6 +80,9 @@ type Config struct {
 	Sort struct {
 		Group string `toml:"group"` // "activity" (default) or "repo"
 	} `toml:"sort"`
+	Filter struct {
+		Running bool `toml:"running"` // start with the "only running" filter ('o') already applied
+	} `toml:"filter"`
 	Git struct {
 		Icon   string   `toml:"icon"`   // per-repo glyph; "" hides the column
 		Colors []string `toml:"colors"` // palette cycled per repo; empty uses a built-in one

@@ -108,6 +108,11 @@ project = "full"
 #   "activity"     (default) newest first, live floated to the top.
 group = "activity"
 
+[filter]
+# false (default) shows every session on start. true begins with the "only
+# running" filter already applied, same as pressing 'o'.
+running = false
+
 [git]
 # An optional per-repo coloured glyph, drawn just before the branch column, that
 # gives each git repo (shared across its worktrees) a consistent colour — handy
