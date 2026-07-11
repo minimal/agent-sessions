@@ -55,7 +55,7 @@ loads TypeScript extensions directly via jiti.
 | `message_end` (assistant) | write | `waiting` |
 | `tool_execution_start` | write    | `running` (+ start poll) |
 | `tool_execution_end`   | (poll stops; stale waiting flag cleared) | |
-| `agent_end`       | write         | `idle`   |
+| `agent_settled`  | write         | `idle`   |
 | `session_shutdown`| delete        | —        |
 
 While a tool is executing, the extension polls every 1.5s and writes the
@@ -64,6 +64,13 @@ status based on:
 1. A sidecar flag file `<liveDir>/<sid>.waiting` (see Cooperation protocol
    below) — if present, `waiting`.
 2. Otherwise `ctx.isIdle()` — `true` → `waiting`, `false` → `running`.
+
+We use `agent_settled` (not `agent_end`) for the idle state, because
+`agent_end` fires before auto-retry, auto-compact, or queued follow-up
+messages. `agent_settled` is the "pi will not continue running
+automatically" signal that the extension docs recommend for status
+integrations. See
+[agent_start / agent_end / agent_settled](https://github.com/earendil-works/pi/blob/v0.80.4/packages/coding-agent/docs/extensions.md#agent_start--agent_end--agent_settled).
 
 Markers are written atomically (temp file + rename) so `agent-sessions` never
 reads a half-written file.
