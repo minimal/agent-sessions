@@ -241,8 +241,9 @@ tmux send-keys -t "$p" "claude {text-input:Prompt}" Enter
 # Which session sources to load. Each is a sub-table; an omitted section keeps
 # the default below (enabled). Disable one with enabled = false. An optional
 # `enter` per source overrides the [commands] "enter" binding for that source's
-# sessions (resume syntax differs: claude --resume vs pi --session). Adding a
-# future source means adding a [sources.<name>] section here plus its adapter.
+# sessions (resume syntax differs: claude --resume vs pi --session vs
+# copilot --resume). Adding a future source means adding a [sources.<name>]
+# section here plus its adapter.
 [sources.claude]
 enabled = true
 [sources.pi]
@@ -252,6 +253,13 @@ enabled = true
 # else cwd-match), or resume the session in the current terminal if it has no
 # visible tmux pane.
 enter = "tmux select-pane -t {pane} && tmux select-window -t {pane} && tmux switch-client -t {pane} 2>/dev/null || (cd {cwd} && pi --session {id})"
+[sources.copilot]
+enabled = true
+# session_dir = ""   # override; empty = $COPILOT_HOME/session-state or ~/.copilot/session-state
+# Jump to the Copilot session's pane (authoritative with the copilot-live hook,
+# see extensions/copilot-live, else cwd-match), or resume it in the current
+# terminal if it has no visible tmux pane.
+enter = "tmux select-pane -t {pane} && tmux select-window -t {pane} && tmux switch-client -t {pane} 2>/dev/null || (cd {cwd} && copilot --resume={id})"
 
 # --- Catppuccin Mocha example -------------------------------------------------
 # The ANSI-base defaults above already follow your terminal theme. To pin exact

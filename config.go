@@ -106,6 +106,11 @@ type Config struct {
 			SessionDir string `toml:"session_dir"` // "" = $PI_CODING_AGENT_SESSION_DIR or ~/.pi/agent/sessions
 			Enter      string `toml:"enter"`       // overrides the "enter" command for pi sessions
 		} `toml:"pi"`
+		Copilot struct {
+			Enabled    bool   `toml:"enabled"`
+			SessionDir string `toml:"session_dir"` // "" = $COPILOT_HOME/session-state or ~/.copilot/session-state
+			Enter      string `toml:"enter"`       // overrides the "enter" command for copilot sessions
+		} `toml:"copilot"`
 	} `toml:"sources"`
 }
 
