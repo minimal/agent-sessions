@@ -18,7 +18,8 @@ func TestPiLiveMarker(t *testing.T) {
 
 	a := newPiAdapter(sessionsDir)
 
-	// Two pi sessions; only sid-1 has a marker.
+	// Two pi sessions; only sid-1 has a marker. Use the real test PID so the
+	// live-liveness check (pidAlive) considers the marker current.
 	sessions := []Session{
 		{ID: "sid-1", Source: "pi", CWD: "/home/chris/code/foo"},
 		{ID: "sid-2", Source: "pi", CWD: "/home/chris/code/bar"},
@@ -26,7 +27,7 @@ func TestPiLiveMarker(t *testing.T) {
 
 	marker := piLiveMarker{
 		SID:       "sid-1",
-		PID:       12345,
+		PID:       os.Getpid(),
 		Pane:      "%5",
 		CWD:       "/home/chris/code/foo",
 		Status:    "running",
@@ -42,8 +43,8 @@ func TestPiLiveMarker(t *testing.T) {
 	if !sessions[0].Live() {
 		t.Errorf("sid-1 should be live")
 	}
-	if sessions[0].PID != 12345 {
-		t.Errorf("sid-1 PID = %d, want 12345", sessions[0].PID)
+	if sessions[0].PID != os.Getpid() {
+		t.Errorf("sid-1 PID = %d, want %d", sessions[0].PID, os.Getpid())
 	}
 	if sessions[0].Pane != "%5" {
 		t.Errorf("sid-1 Pane = %q, want %%5", sessions[0].Pane)
@@ -72,7 +73,7 @@ func TestPiLiveMarkerFallsBackToTimestampUUID(t *testing.T) {
 
 	// Go id is "<timestamp>_<uuid>" but the extension writes the uuid only.
 	sessions := []Session{{ID: "20260101_abc123", Source: "pi", CWD: "/p"}}
-	marker := piLiveMarker{SID: "abc123", PID: 999, Status: "idle", UpdatedAt: time.Now()}
+	marker := piLiveMarker{SID: "abc123", PID: os.Getpid(), Status: "idle", UpdatedAt: time.Now()}
 	data, _ := json.Marshal(marker)
 	if err := os.WriteFile(filepath.Join(liveDir, "abc123.json"), data, 0644); err != nil {
 		t.Fatal(err)
@@ -80,7 +81,7 @@ func TestPiLiveMarkerFallsBackToTimestampUUID(t *testing.T) {
 
 	a.Live(sessions)
 
-	if !sessions[0].Live() || sessions[0].PID != 999 {
+	if !sessions[0].Live() || sessions[0].PID != os.Getpid() {
 		t.Errorf("marker should match by uuid suffix: got PID=%d live=%v", sessions[0].PID, sessions[0].Live())
 	}
 }
@@ -112,6 +113,54 @@ func TestPiLiveMarkerStaleCleanup(t *testing.T) {
 
 	if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
 		t.Errorf("stale orphan marker should have been deleted")
+	}
+}
+
+func TestPiLiveMarkerDeadPID(t *testing.T) {
+	tmp := t.TempDir()
+	sessionsDir := filepath.Join(tmp, "sessions")
+	liveDir := filepath.Join(tmp, "live")
+	if err := os.MkdirAll(liveDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	a := newPiAdapter(sessionsDir)
+
+	// pidAlive(0) and dead PIDs return false; the live self-pid is true.
+	if pidAlive(0) {
+		t.Error("pid 0 should be considered dead")
+	}
+	if !pidAlive(os.Getpid()) {
+		t.Errorf("current pid %d should be alive", os.Getpid())
+	}
+
+	// 1<<30 is well beyond any reasonable pid_max (default 4194304), so
+	// signal 0 against it is guaranteed to fail -> pidAlive is false. This
+	// exercises the "PID is no longer alive" cleanup path deterministically
+	// (no spawn/reap, no PID-reuse race).
+	deadPID := 1 << 30
+	marker := piLiveMarker{
+		SID:       "dead",
+		PID:       deadPID,
+		Status:    "idle",
+		UpdatedAt: time.Now(),
+	}
+	data, _ := json.Marshal(marker)
+	markerPath := filepath.Join(liveDir, "dead.json")
+	if err := os.WriteFile(markerPath, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions := []Session{{ID: "dead", Source: "pi", CWD: "/p"}}
+	a.Live(sessions)
+
+	if sessions[0].Live() {
+		t.Errorf("session with dead-PID marker should not be live (PID=%d, State=%q)", sessions[0].PID, sessions[0].State)
+	}
+	if sessions[0].State == StateIdle {
+		t.Errorf("session with dead-PID marker must not inherit status=idle")
+	}
+	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+		t.Errorf("dead-PID marker should be cleaned up; stat err = %v", err)
 	}
 }
 

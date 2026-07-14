@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -141,6 +142,23 @@ func (a *piAdapter) readLiveMarkers() map[string]piLiveMarker {
 	return markers
 }
 
+// pidAlive reports whether pid is currently a live process we can observe. It
+// uses signal 0, which probes for existence and permission without disturbing
+// the target. A nil error means alive; EPERM means the process exists but we
+// lack permission to signal it (treat as alive); anything else means the PID
+// is gone. This is what lets us tell apart a real running pi from a stale
+// marker left behind after tmux was restarted and the panes — and the pi
+// processes inside them — were killed.
+func pidAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	if err := syscall.Kill(pid, 0); err != nil {
+		return errors.Is(err, syscall.EPERM)
+	}
+	return true
+}
+
 // piIDVariants returns possible marker keys for a session id. The extension
 // uses the session uuid as sid, but Go's fallback id parsing may keep a
 // "<timestamp>_<uuid>" form when the transcript's session line lacks an id.
@@ -195,18 +213,30 @@ func (a *piAdapter) Live(sessions []Session) {
 		}
 	}
 
+	// verified tracks marker sids whose PID we already confirmed alive in the
+	// apply pass below, so the cleanup pass doesn't re-probe them.
+	verified := map[string]bool{}
+
 	for i := range sessions {
 		if sessions[i].Source != "pi" {
 			continue
 		}
 
-		// Try the session id, then the uuid suffix, then give up.
+		// Try the session id, then the uuid suffix, then give up. A marker
+		// whose PID is no longer a live process is stale (e.g. tmux was
+		// restarted and the pi inside the pane was killed) — skip it so the
+		// session falls through to the cwd-pane match instead of being shown
+		// as live with whatever status it last had.
 		var marker piLiveMarker
 		var hasMarker bool
 		for _, v := range piIDVariants(sessions[i].ID) {
 			if m, ok := markers[v]; ok {
+				if !pidAlive(m.PID) {
+					continue
+				}
 				marker = m
 				hasMarker = true
+				verified[v] = true
 				break
 			}
 		}
@@ -220,12 +250,24 @@ func (a *piAdapter) Live(sessions []Session) {
 		}
 	}
 
-	// Clean up markers that have no matching session and are older than an hour.
-	// We preserve young orphans in case a session exists but hasn't been loaded
-	// by the cache yet.
+	// Clean up stale markers:
+	//   1. PID is no longer alive -> the process is gone (crash, killed, tmux
+	//      restart). Delete regardless of age or whether a session matches:
+	//      a fresh session_start from a resumed pi would have overwritten the
+	//      marker with the new PID, so a dead PID here is definitively stale.
+	//   2. No matching session and older than an hour -> orphan. We preserve
+	//      young orphans in case a session exists but hasn't been loaded by
+	//      the cache yet.
 	const staleThreshold = time.Hour
 	dir := a.liveDir()
 	for sid, marker := range markers {
+		if verified[sid] {
+			continue
+		}
+		if !pidAlive(marker.PID) {
+			_ = os.Remove(filepath.Join(dir, sid+".json"))
+			continue
+		}
 		if sessionIDs[sid] {
 			continue
 		}
