@@ -27,6 +27,10 @@ func newLineInput() textinput.Model {
 
 const refreshEvery = 2 * time.Second
 
+// doubleClickWithin is the window in which a second left click on the same
+// row counts as a double click.
+const doubleClickWithin = 400 * time.Millisecond
+
 // Sessions with no live process and no activity for this long are dimmed.
 const dimAfter = 24 * time.Hour
 
@@ -159,6 +163,9 @@ type model struct {
 	deleting       *Session // awaiting y/n confirmation to delete
 	picker         pickerState
 	prompt         promptState
+	switchOnClick  bool      // a single left click switches, not just selects
+	lastClickRow   int       // session index of the previous left click
+	lastClickAt    time.Time // when the previous left click happened
 	cursor         int
 	offset         int
 	width          int
@@ -244,6 +251,8 @@ func newModel(cfg Config) model {
 		ciPending:      map[string]time.Time{},
 		unread:         map[string]bool{},
 		seen:           map[string]SessionState{},
+		switchOnClick:  cfg.Mouse.ClickAction == "select-switch",
+		lastClickRow:   -1,
 		loading:        true,
 	}
 }
@@ -391,6 +400,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.FocusMsg:
 		m.cursorHidden = false // regaining focus brings the cursor back
 
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
+
 	case tea.KeyMsg:
 		m.notice = ""
 		m.cursorHidden = false // any key brings the cursor back
@@ -502,6 +514,51 @@ func sourceEnterTemplate(source, global string, overrides map[string]string) str
 		return piEnterBuiltin
 	}
 	return global
+}
+
+// handleMouse turns mouse input into selection and, per config, a switch.
+// The wheel moves the cursor; a left click selects the clicked row (or the
+// session its preview line belongs to), and switches to it too — running the
+// enter command — when [mouse] click_action is "select-switch" or the click
+// is the second of a double click. Overlays keep their own keyboard driving.
+func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.showHelp || m.picker.active || m.prompt.active || m.searching || m.deleting != nil {
+		return m, nil
+	}
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		m.cursor = max(m.cursor-1, 0)
+		m.clampOffset()
+		return m, nil
+	case tea.MouseButtonWheelDown:
+		m.cursor = min(m.cursor+1, m.lastRow())
+		m.clampOffset()
+		return m, nil
+	}
+	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft || msg.Y < 1 {
+		return m, nil
+	}
+	// The top bar is row 0 and the status bar sits below the page, so display
+	// lines occupy click Y in [1, pageSize]. Resolve the line through the
+	// current layout to the session it belongs to (its row or preview line).
+	rows := m.layout()
+	line := m.offset + msg.Y - 1
+	if line >= len(rows) {
+		return m, nil
+	}
+	si := rows[line].si
+	m.notice = ""
+	m.cursorHidden = false
+	now := time.Now()
+	doubleClick := si == m.lastClickRow && now.Sub(m.lastClickAt) < doubleClickWithin
+	m.cursor = si
+	m.lastClickRow, m.lastClickAt = si, now
+	m.clampOffset()
+	if tmpl := m.commands["enter"]; tmpl != "" && (m.switchOnClick || doubleClick) {
+		m.lastClickRow = -1 // consumed; don't let a third click re-switch
+		return m.runCommand(tmpl)
+	}
+	return m, nil
 }
 
 // runCommand runs a command template for the selected session, handing it
@@ -977,6 +1034,10 @@ func (m model) pickerView() string {
 
 // helpView lists the built-in keys and every configured command.
 func (m model) helpView() string {
+	mouseHelp := "    mouse              click a row to select, double-click to switch; wheel scrolls"
+	if m.switchOnClick {
+		mouseHelp = "    mouse              click a row to select and switch; wheel scrolls"
+	}
 	lines := []string{
 		"",
 		"  Built-in keys",
@@ -987,6 +1048,7 @@ func (m model) helpView() string {
 		"    f                  filter the list to one project (opens the picker)",
 		"    o                  toggle showing only sessions with a running claude process",
 		"    d                  delete session (transcript + sidecar files; asks y/n)",
+		mouseHelp,
 		"    r                  refresh now",
 		"    ?                  this help",
 		"    q                  quit",
