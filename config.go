@@ -74,6 +74,7 @@ type Config struct {
 		Recent int    `toml:"recent"` // max recent sessions to always preview
 		Within string `toml:"within"` // recency window, a Go duration string
 	} `toml:"preview"`
+	Columns ColumnBounds `toml:"columns"`
 	Tmux struct {
 		Glyph string `toml:"glyph"` // marker on tmux-attachable sessions; "" hides it
 	} `toml:"tmux"`
@@ -107,6 +108,27 @@ type Config struct {
 			Enter      string `toml:"enter"`       // overrides the "enter" command for pi sessions
 		} `toml:"pi"`
 	} `toml:"sources"`
+}
+
+// ColumnConfig bounds the width of one column. For "content" columns (dir,
+// branch, pane, title) the width is clamp(observed, Min, Max), where
+// observed is the longest value across visible sessions. For the "last"
+// column the width is clamp(rest, Min, Max), where rest is whatever's left
+// of the row after the other columns -- last messages are always long, so
+// the bound is the column width directly. Set Max = 0 to hide the column.
+type ColumnConfig struct {
+	Min int `toml:"min"`
+	Max int `toml:"max"`
+}
+
+// ColumnBounds groups the per-column width configuration. Each field is a
+// ColumnConfig with min/max bounds; max=0 hides the column.
+type ColumnBounds struct {
+	Dir    ColumnConfig `toml:"dir"`    // the project column
+	Branch ColumnConfig `toml:"branch"` // the git branch column
+	Pane   ColumnConfig `toml:"pane"`   // the tmux pane
+	Title  ColumnConfig `toml:"title"`  // the session title (cap in preview "column" mode)
+	Last   ColumnConfig `toml:"last"`   // the last message (preview "column" mode only)
 }
 
 // ciToken returns the configured CircleCI token, falling back to the

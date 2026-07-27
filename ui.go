@@ -34,16 +34,10 @@ const doubleClickWithin = 400 * time.Millisecond
 // Sessions with no live process and no activity for this long are dimmed.
 const dimAfter = 24 * time.Hour
 
-// Index column widths. The last column takes the remaining width: the
-// subject, unless preview "column" mode caps it (colSubject) to make room
-// for the last message.
-const (
-	colProject = 28
-	colBranch  = 24
-	colPane    = 12
-	colCI      = 4
-	colSubject = 30
-)
+// colCI is the fixed width of the CI column (gated by [circleci].token).
+// The dir, branch, pane, title and last columns are sized dynamically per
+// the [columns] config -- see widths and computeWidths.
+const colCI = 4
 
 // colState fits every state word the index can show.
 var colState = func() int {
@@ -53,6 +47,18 @@ var colState = func() int {
 	}
 	return w
 }()
+
+// widths holds the per-column visual widths computed for the current
+// session set. dir/branch/pane are used in every mode; titleCap caps the
+// subject in preview "column" mode. A value of 0 means the column is
+// hidden: the cell and its trailing gap are both skipped, and the subject
+// is hidden in column mode.
+type widths struct {
+	dir      int
+	branch   int
+	pane     int
+	titleCap int // cap for the subject in preview "column" mode
+}
 
 // styles are the configured looks of each UI element.
 type styles struct {
@@ -146,6 +152,8 @@ type model struct {
 	commands       map[string]string // key name -> command template
 	ciToken        string            // "" disables the CI column
 	ciSlugs        map[string]string // cwd -> CircleCI project slug ("" = none)
+	colCfg         ColumnBounds      // per-column width bounds from [columns]
+	widths         widths            // computed column widths for m.sessions
 	ci             map[string]ciEntry
 	ciPending      map[string]time.Time // slug@branch (or cwd@branch) in flight
 	all            []Session            // every session, unfiltered
@@ -222,7 +230,7 @@ func newModel(cfg Config) model {
 	if cfg.Sources.Pi.Enter != "" {
 		enterBySource["pi"] = cfg.Sources.Pi.Enter
 	}
-	return model{
+	m := model{
 		loader:         newMultiLoader(adapters, cfg.SortDims()),
 		styles:         newStyles(cfg),
 		commands:       cfg.Commands,
@@ -247,6 +255,7 @@ func newModel(cfg Config) model {
 		previewWithin:  cfg.PreviewWithin(),
 		ciToken:        cfg.ciToken(),
 		ciSlugs:        cfg.ciOverrides(),
+		colCfg:         cfg.Columns,
 		ci:             map[string]ciEntry{},
 		ciPending:      map[string]time.Time{},
 		unread:         map[string]bool{},
@@ -255,6 +264,8 @@ func newModel(cfg Config) model {
 		lastClickRow:   -1,
 		loading:        true,
 	}
+	m.computeWidths()
+	return m
 }
 
 // pickerState is the project-selection overlay, opened either by a command
@@ -290,6 +301,100 @@ func glyphWidth(glyphs map[marker]string) int {
 		w = max(w, lipgloss.Width(g))
 	}
 	return w
+}
+
+// iconOverhead returns the display width an icon prefix takes inside its
+// column: the icon itself plus the one-space separator, or 0 if the icon is
+// disabled. The column's configured min/max bounds are visual (total) widths,
+// so this overhead is added to the observed text width before clamping.
+func iconOverhead(icon string) int {
+	if icon == "" {
+		return 0
+	}
+	return lipgloss.Width(icon) + 1
+}
+
+// colWidth applies a column's bounds: cfg.Max == 0 hides the column
+// (returning 0, which the renderer treats as "skip the cell and its
+// trailing gap"). Otherwise the width is clamp(observed + iconOverhead,
+// cfg.Min, cfg.Max). A misconfigured min > max is treated as a pin to
+// cfg.Min, since the larger value is the user's intent.
+func colWidth(observed, iconOH int, cfg ColumnConfig) int {
+	if cfg.Max == 0 {
+		return 0
+	}
+	w := observed + iconOH
+	if w < cfg.Min {
+		w = cfg.Min
+	}
+	if w > cfg.Max {
+		w = cfg.Max
+	}
+	return w
+}
+
+// observedDirWidth returns the widest directory value across the visible
+// sessions, respecting m.dirNameOnly. Empty paths contribute 0.
+func (m *model) observedDirWidth() int {
+	var w int
+	for _, s := range m.sessions {
+		v := s.Project()
+		if m.dirNameOnly {
+			v = s.Dir()
+		}
+		if wv := lipgloss.Width(v); wv > w {
+			w = wv
+		}
+	}
+	return w
+}
+
+// observedBranchWidth returns the widest non-empty branch name across the
+// visible sessions. Empty branches and "HEAD" (detached) contribute 0 --
+// they don't pull the column down -- but iconBody still reserves the icon
+// slot on those rows, so the column keeps its visual width.
+func (m *model) observedBranchWidth() int {
+	var w int
+	for _, s := range m.sessions {
+		b := s.Branch
+		if b == "" || b == "HEAD" {
+			continue
+		}
+		if wb := lipgloss.Width(b); wb > w {
+			w = wb
+		}
+	}
+	return w
+}
+
+// observedPaneWidth returns the widest tmux pane name across the visible
+// sessions. An empty pane (session not in tmux) contributes 0.
+func (m *model) observedPaneWidth() int {
+	var w int
+	for _, s := range m.sessions {
+		if wp := lipgloss.Width(s.Pane); wp > w {
+			w = wp
+		}
+	}
+	return w
+}
+
+// computeWidths fills m.widths for the current m.sessions. Call this after
+// any change to the visible session set (initial load, poll refresh, filter
+// change, window resize). It is O(visible sessions x 3 columns), so the
+// per-refresh cost is negligible even with hundreds of sessions.
+func (m *model) computeWidths() {
+	cfg := m.colCfg
+	// The branch column carries both the branch icon prefix and the per-repo
+	// git icon prefix, so the overhead is the sum of the two.
+	branchOH := iconOverhead(m.branchIcon) + iconOverhead(m.gitIcon)
+	m.widths.dir = colWidth(m.observedDirWidth(), iconOverhead(m.dirIcon), cfg.Dir)
+	m.widths.branch = colWidth(m.observedBranchWidth(), branchOH, cfg.Branch)
+	m.widths.pane = colWidth(m.observedPaneWidth(), 0, cfg.Pane)
+	// titleCap is the upper bound on the subject in preview "column" mode.
+	// The actual subject width also depends on what's left of the row
+	// (shared with the last message), so it's computed in renderRow.
+	m.widths.titleCap = cfg.Title.Max
 }
 
 type sessionsLoadedMsg struct {
@@ -359,6 +464,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detectUnread(msg.sessions)
 		m.all = msg.sessions
 		m.applyFilter()
+		m.computeWidths()
 		m.clampOffset()
 		return m, tea.Batch(m.ciFetchCmd(), m.ensureSpinner())
 
@@ -816,6 +922,7 @@ func (m *model) applyFilter() {
 		parts = append(parts, "running only")
 	}
 	m.status = strings.Join(parts, ", ")
+	m.computeWidths()
 }
 
 // ciFetchCmd starts a background fetch of CI statuses for visible rows
@@ -1053,6 +1160,11 @@ func (m model) helpView() string {
 		"    ?                  this help",
 		"    q                  quit",
 		"",
+		"  Columns (see [columns] in your config)",
+		"    The content columns (dir, branch, pane, title) size to the longest",
+		"    visible value, clamped to a per-column min/max. Set max = 0 to hide",
+		"    a column; set min = max to pin it to a fixed width.",
+		"",
 	}
 	if m.ciToken != "" {
 		lines = append(lines,
@@ -1140,6 +1252,9 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 
 	mk := m.markerFor(s)
 	var b strings.Builder
+	// Prefix: index, status group (status + state word + tmux marker), and
+	// time. All fixed-width; the time cell has no trailing gap -- the first
+	// emit() call below adds it.
 	b.WriteString(seg(m.styles.index, fmt.Sprintf("%4d", idx+1)))
 	b.WriteString(gap(1))
 	b.WriteString(statusSeg(m.styleFor(mk), mk, m.statusCell(mk)))
@@ -1154,53 +1269,117 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 	b.WriteString(seg(lipgloss.NewStyle(), m.tmuxCell(s)))
 	b.WriteString(gap(2))
 	b.WriteString(seg(m.styles.time, s.When().Format("Jan 02 15:04")))
-	b.WriteString(gap(2))
 
-	project := s.Project()
-	if m.dirNameOnly {
-		project = s.Dir()
+	// Dynamic-width columns. Each emit() prepends a 2-space gap, so a hidden
+	// column (width 0) skips both its cell and the gap that would separate
+	// it from the previous one -- keeping the row tight when the user turns
+	// columns off.
+	dirOH := iconOverhead(m.dirIcon)
+	branchOH := iconOverhead(m.branchIcon)
+	gitOH := iconOverhead(m.gitIcon)
+	emit := func(cell string) {
+		b.WriteString(gap(2))
+		b.WriteString(cell)
 	}
-	b.WriteString(seg(m.styles.project, iconBody(m.dirIcon, project, colProject)))
-	b.WriteString(gap(2))
-	// With the git icon on, the icon and the branch text share the repo's
-	// colour, so the whole git area reads as one colour-coded unit per repo.
-	var repoFg lipgloss.TerminalColor
-	if m.gitIcon != "" && s.Repo != "" {
-		repoFg = m.repoColor(s.Repo)
-	}
-	if m.gitIcon != "" {
-		cell := strings.Repeat(" ", lipgloss.Width(m.gitIcon)+1) // reserved, aligned slot
-		st := lipgloss.NewStyle()
-		if s.Repo != "" {
-			cell = m.gitIcon + " "
-			if repoFg != nil {
-				st = st.Foreground(repoFg)
-			}
+
+	// dir column.
+	if m.widths.dir > 0 {
+		project := s.Project()
+		if m.dirNameOnly {
+			project = s.Dir()
 		}
-		b.WriteString(seg(st, cell))
+		emit(seg(m.styles.project, iconBody(m.dirIcon, project, m.widths.dir-dirOH)))
 	}
-	branchStyle := m.styles.branch
-	if repoFg != nil {
-		branchStyle = branchStyle.Foreground(repoFg)
-	}
-	b.WriteString(seg(branchStyle, iconBody(m.branchIcon, s.Branch, colBranch)))
-	b.WriteString(gap(2))
-	b.WriteString(seg(lipgloss.NewStyle(), truncPad(s.Pane, colPane)))
-	b.WriteString(gap(2))
 
+	// branch column, with an optional per-repo git icon prefix. When the git
+	// icon is on, the icon and the branch text share the repo's colour, so
+	// the whole git area reads as one colour-coded unit per repo.
+	if m.widths.branch > 0 {
+		var repoFg lipgloss.TerminalColor
+		gitCell := ""
+		if m.gitIcon != "" {
+			cell := strings.Repeat(" ", lipgloss.Width(m.gitIcon)+1) // reserved, aligned slot
+			st := lipgloss.NewStyle()
+			if s.Repo != "" {
+				cell = m.gitIcon + " "
+				repoFg = m.repoColor(s.Repo)
+				if repoFg != nil {
+					st = st.Foreground(repoFg)
+				}
+			}
+			gitCell = seg(st, cell)
+		}
+		branchStyle := m.styles.branch
+		if repoFg != nil {
+			branchStyle = branchStyle.Foreground(repoFg)
+		}
+		bodyW := m.widths.branch - branchOH - gitOH
+		emit(gitCell + seg(branchStyle, iconBody(m.branchIcon, s.Branch, bodyW)))
+	}
+
+	// pane column.
+	if m.widths.pane > 0 {
+		emit(seg(lipgloss.NewStyle(), truncPad(s.Pane, m.widths.pane)))
+	}
+
+	// ci column (gated by the CircleCI token, not by a column bound).
 	if m.ciToken != "" {
-		b.WriteString(seg(lipgloss.NewStyle(), truncPad(m.ciStatus(s), colCI)))
-		b.WriteString(gap(2))
+		emit(seg(lipgloss.NewStyle(), truncPad(m.ciStatus(s), colCI)))
 	}
 
-	subject := s.Subject()
-	if m.previewMode == previewColumn {
-		subject = truncPad(subject, colSubject)
+	// Subject and last message. In preview "column" mode the subject is
+	// capped at titleCap and shares the remaining row width with the last
+	// message (which has its own min/max bounds). In row/off modes the
+	// subject takes whatever's left and the last message lives in the detail
+	// line below.
+	prefixW := lipgloss.Width(b.String())
+	rest := max(0, m.width-prefixW)
+	titleMax := m.colCfg.Title.Max
+	lastMax := m.colCfg.Last.Max
+	lastMin := m.colCfg.Last.Min
+	inColumn := m.previewMode == previewColumn
+	showSubject := !inColumn || titleMax > 0
+	showLast := inColumn && s.LastMsg != "" && lastMax > 0
+
+	var subjectW int
+	if showSubject {
+		switch {
+		case inColumn && showLast:
+			// Subject takes titleMax first; squeeze to lastMin if needed so
+			// the last message has room.
+			subjectW = min(titleMax, rest)
+			if rest-subjectW < lastMin {
+				subjectW = max(0, rest-lastMin)
+			}
+		case inColumn:
+			subjectW = min(titleMax, rest)
+		default:
+			subjectW = rest
+		}
+		// In column mode the subject cell is padded to its width so the last
+		// message's gap is well-defined. In row/off modes the row ends at the
+		// subject -- we only truncate, never pad -- so a short subject leaves
+		// the row at its natural width (fill, if requested, pads the tail).
+		if inColumn {
+			emit(seg(m.styles.subject, truncPad(s.Subject(), subjectW)))
+		} else {
+			emit(seg(m.styles.subject, trunc(s.Subject(), subjectW)))
+		}
 	}
-	b.WriteString(seg(m.styles.subject, subject))
-	if m.previewMode == previewColumn && s.LastMsg != "" {
-		b.WriteString(gap(2))
-		b.WriteString(seg(m.styles.preview, s.LastMsg))
+
+	if showLast {
+		var lastW int
+		if showSubject {
+			lastW = max(0, rest-subjectW)
+			if lastW > lastMax {
+				lastW = lastMax
+			}
+		} else {
+			// subject hidden: the last message takes the rest, bounded by
+			// lastMin / lastMax directly.
+			lastW = max(lastMin, min(rest, lastMax))
+		}
+		emit(seg(m.styles.preview, truncPad(s.LastMsg, lastW)))
 	}
 
 	line := b.String()

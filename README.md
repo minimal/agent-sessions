@@ -168,6 +168,31 @@ path or just its final segment. Search still matches the full path either way:
 project = "full"   # or "name" for just the directory name
 ```
 
+The `[columns]` section bounds the width of each column. The content columns
+(`dir`, `branch`, `pane`, `title`) size to the longest visible value, clamped
+to a per-column `min`/`max`. The `last` column is config-only — last messages
+are always long, so the bounds are the actual column width. Set `max = 0` to
+hide a column, and `min = max` to pin it to a fixed width (restoring the
+pre-feature behaviour):
+
+```toml
+[columns]
+dir    = { min = 8,  max = 28 }   # the project column
+branch = { min = 8,  max = 24 }   # the git branch column
+pane   = { min = 0,  max = 12 }   # the tmux pane; min = 0 lets it collapse
+title  = { min = 0,  max = 30 }   # the session title (cap in preview "column" mode)
+last   = { min = 0,  max = 100 }  # the last message (preview "column" mode only)
+```
+
+Bounds refer to the column's *visual* width (the icon and its 1-space
+separator count against `min`/`max` when the icon is on). The defaults
+recover a lot of horizontal space on narrow terminals — a session set
+where every branch is `main` and every pane is `0` shrinks the row by
+about 27 columns compared to the old fixed-width layout, which is the
+exact complaint that motivated the feature. Hidden columns drop both the
+cell and the 2-space gap before it, so the next column abuts the previous
+one cleanly.
+
 `[circleci]` enables a CI column showing the latest CircleCI status of each
 session's branch (`pass`, `fail`, `run`, `hold`, or `-` for no pipelines).
 Set `token` (or export `$CIRCLECI_TOKEN`/`$CIRCLE_TOKEN`); without a token

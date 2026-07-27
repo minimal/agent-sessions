@@ -20,15 +20,21 @@ func testModel(mode previewMode, sessions []Session) model {
 			sessions[i].Activity = sessions[i].Modified
 		}
 	}
+	var cfg Config
+	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
+		panic(err)
+	}
 	m := model{
 		previewMode:   mode,
 		previewRecent: 5,
 		previewWithin: 20 * time.Minute,
 		showWords:     true,
+		colCfg:        cfg.Columns,
 		sessions:      sessions,
 		width:         160,
 		height:        40, // tall enough to show every row
 	}
+	m.computeWidths()
 	m.clampOffset()
 	return m
 }
@@ -256,6 +262,8 @@ func TestColumnIcons(t *testing.T) {
 	m := testModel(previewColumn, sessions)
 	m.dirIcon = "D"
 	m.branchIcon = "B"
+	m.computeWidths() // recompute now that the icons are set
+	branchOH := iconOverhead(m.branchIcon)
 	out := m.View()
 
 	if !strings.Contains(out, "D /tmp/proj") {
@@ -266,11 +274,11 @@ func TestColumnIcons(t *testing.T) {
 	}
 	// The icon slot is still reserved when the value is empty (alignment),
 	// but the icon itself is not drawn for the branchless session.
-	if got := m.iconCell("B", "", colBranch, m.styles.branch, true); strings.Contains(got, "B") {
+	if got := m.iconCell("B", "", m.widths.branch-branchOH, m.styles.branch, true); strings.Contains(got, "B") {
 		t.Errorf("empty branch should not draw its icon, got %q", got)
 	}
-	if lipgloss.Width(m.iconCell("B", "main", colBranch, m.styles.branch, true)) !=
-		lipgloss.Width(m.iconCell("B", "", colBranch, m.styles.branch, true)) {
+	if lipgloss.Width(m.iconCell("B", "main", m.widths.branch-branchOH, m.styles.branch, true)) !=
+		lipgloss.Width(m.iconCell("B", "", m.widths.branch-branchOH, m.styles.branch, true)) {
 		t.Errorf("icon cell width should match whether or not the value is empty")
 	}
 }
@@ -663,5 +671,221 @@ func TestPiEnterBuiltinNoClaudeResume(t *testing.T) {
 	}
 	if !strings.Contains(line, "pi --session") {
 		t.Errorf("pi enter should resume pi, got: %s", line)
+	}
+}
+
+// TestColWidth exercises the per-column bounds helper: max=0 hides the
+// column, otherwise the width is clamp(observed + iconOverhead, Min, Max),
+// and a misconfigured min > max is treated as a pin to min (the larger of
+// the two — the user's likely intent).
+func TestColWidth(t *testing.T) {
+	cases := []struct {
+		name     string
+		observed int
+		iconOH   int
+		cfg      ColumnConfig
+		want     int
+	}{
+		{"hide with max=0", 10, 0, ColumnConfig{Min: 0, Max: 0}, 0},
+		{"min wins when observed is small", 3, 0, ColumnConfig{Min: 8, Max: 24}, 8},
+		{"observed wins in the middle", 12, 0, ColumnConfig{Min: 8, Max: 24}, 12},
+		{"max wins when observed is large", 30, 0, ColumnConfig{Min: 8, Max: 24}, 24},
+		{"icon overhead counts against min", 5, 2, ColumnConfig{Min: 8, Max: 24}, 8},
+		{"icon overhead in the middle", 10, 2, ColumnConfig{Min: 8, Max: 24}, 12},
+		{"min > max collapses to max", 5, 0, ColumnConfig{Min: 30, Max: 10}, 10},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := colWidth(c.observed, c.iconOH, c.cfg); got != c.want {
+				t.Errorf("colWidth(%d, %d, %+v) = %d, want %d", c.observed, c.iconOH, c.cfg, got, c.want)
+			}
+		})
+	}
+}
+
+func TestIconOverhead(t *testing.T) {
+	if got := iconOverhead(""); got != 0 {
+		t.Errorf("empty icon overhead = %d, want 0", got)
+	}
+	if got := iconOverhead("D"); got != 2 { // 1 char + 1 space
+		t.Errorf("1-char icon overhead = %d, want 2", got)
+	}
+	if got := iconOverhead(""); got != 0 {
+		t.Errorf("explicit empty icon overhead = %d, want 0", got)
+	}
+}
+
+// TestColumnWidthsShrinkToContent verifies that short content columns
+// shrink to the configured min, recovering the wasted padding the old
+// fixed-width layout had (the user's original complaint: "main" got 24
+// chars of padding for a 4-char branch).
+func TestColumnWidthsShrinkToContent(t *testing.T) {
+	sessions := []Session{
+		{ID: "a", Title: "x", Branch: "main", CWD: "/p", Pane: "0", Modified: time.Now()},
+	}
+	m := testModel(previewRow, sessions)
+	if m.widths.branch != 8 { // observed "main" = 4, clamped to min 8
+		t.Errorf("branch = %d, want 8 (min)", m.widths.branch)
+	}
+	if m.widths.pane != 1 { // observed "0" = 1, no min, no overhead
+		t.Errorf("pane = %d, want 1 (observed)", m.widths.pane)
+	}
+}
+
+// TestColumnWidthsRespectMax verifies that a long branch caps at max and
+// gets truncated, and that the long part of the value is absent from the
+// row (no more "wasted space but no truncation" worst-of-both).
+func TestColumnWidthsRespectMax(t *testing.T) {
+	long := "this-is-a-very-long-branch-name"
+	sessions := []Session{{ID: "a", Title: "x", Branch: long, Modified: time.Now()}}
+	m := testModel(previewRow, sessions)
+	m.colCfg.Branch.Max = 10
+	m.computeWidths()
+	if m.widths.branch != 10 {
+		t.Errorf("branch = %d, want 10 (max)", m.widths.branch)
+	}
+	out := m.View()
+	if strings.Contains(out, "very-long-branch-name") {
+		t.Errorf("long branch should be truncated, got:\n%s", out)
+	}
+	if !strings.Contains(out, "…") {
+		t.Errorf("truncated branch should carry the ellipsis, got:\n%s", out)
+	}
+}
+
+// TestColumnWidthsDisable verifies that max=0 hides the column: the cell
+// is not emitted and the value is absent from the row. The original pane
+// column was 12 chars of padding around a "0" value — turning it off here
+// should drop both the cell and the trailing gap. We compare the raw row
+// (no fill padding) so the width delta is meaningful.
+func TestColumnWidthsDisable(t *testing.T) {
+	sessions := []Session{
+		{ID: "a", Title: "x", CWD: "/p", Pane: "%27", Modified: time.Now()},
+	}
+	m := testModel(previewRow, sessions)
+	// Wide terminal so the final trunc(line, m.width) in renderRow doesn't
+	// pad both rows to the same length and mask the width difference.
+	m.width = 1000
+	if m.widths.pane == 0 {
+		t.Fatal("pane should be visible with the default config")
+	}
+	withPane := m.renderRow(0, false, lipgloss.NewStyle(), false)
+	if !strings.Contains(withPane, "%27") {
+		t.Fatal("baseline: row should contain the pane value")
+	}
+
+	m.colCfg.Pane.Max = 0
+	m.computeWidths()
+	if m.widths.pane != 0 {
+		t.Errorf("pane = %d, want 0 (disabled)", m.widths.pane)
+	}
+	noPane := m.renderRow(0, false, lipgloss.NewStyle(), false)
+	if strings.Contains(noPane, "%27") {
+		t.Errorf("disabled pane should not show its value, got:\n%s", noPane)
+	}
+	// The disabled row should be at least colPane + 2 chars narrower than
+	// the enabled one (the cell + its trailing gap).
+	if delta := lipgloss.Width(withPane) - lipgloss.Width(noPane); delta <= 0 {
+		t.Errorf("disabling pane should shrink row width, got delta=%d (with=%d, no=%d, m.width=%d, widths.pane=%d)", delta, lipgloss.Width(withPane), lipgloss.Width(noPane), m.width, m.widths.pane)
+	}
+}
+
+// TestColumnWidthsRecomputeOnFilter verifies that the column widths adapt
+// when the visible session set changes (e.g. via a search/filter that
+// hides the session with the long branch).
+func TestColumnWidthsRecomputeOnFilter(t *testing.T) {
+	sessions := []Session{
+		{ID: "a", Title: "short", Branch: "main", CWD: "/p", Modified: time.Now()},
+		{ID: "b", Title: "long-title", Branch: "feature/very-long-branch-name", CWD: "/p", Modified: time.Now()},
+	}
+	m := testModel(previewRow, sessions)
+	if m.widths.branch <= 8 {
+		t.Fatalf("branch = %d, want > 8 (long branch should widen column)", m.widths.branch)
+	}
+	m.query = "short" // matches only the first session (title "short")
+	m.applyFilter()
+	if m.widths.branch != 8 {
+		t.Errorf("after filter, branch = %d, want 8 (only 'main' remains)", m.widths.branch)
+	}
+}
+
+// TestColumnWidthsConfigDefaults verifies the shipped config has non-zero
+// maxes for every column, so an upgrade is a no-op for users who don't
+// touch [columns].
+func TestColumnWidthsConfigDefaults(t *testing.T) {
+	var cfg Config
+	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cols := []struct {
+		name string
+		max  int
+	}{
+		{"dir", cfg.Columns.Dir.Max},
+		{"branch", cfg.Columns.Branch.Max},
+		{"pane", cfg.Columns.Pane.Max},
+		{"title", cfg.Columns.Title.Max},
+		{"last", cfg.Columns.Last.Max},
+	}
+	for _, c := range cols {
+		if c.max == 0 {
+			t.Errorf("default [columns].%s.max = 0, want > 0 (column should be visible by default)", c.name)
+		}
+	}
+}
+
+// TestColumnLastClamp verifies that in preview "column" mode, the last
+// message is capped at last.max regardless of how wide the terminal is —
+// the whole point of treating "last" as a config-knob column rather than
+// a content-sized one.
+func TestColumnLastClamp(t *testing.T) {
+	longMsg := strings.Repeat("x", 200)
+	sessions := []Session{
+		{ID: "a", Title: "the subject", LastMsg: longMsg, Modified: time.Now()},
+	}
+	m := testModel(previewColumn, sessions)
+	m.colCfg.Last.Max = 30
+	m.width = 500 // plenty of room; the cap must still apply
+	out := m.View()
+	if strings.Contains(out, longMsg) {
+		t.Errorf("last.max=30 should truncate 200-char message, got:\n%s", out)
+	}
+	if !strings.Contains(out, "…") {
+		t.Errorf("truncated last message should carry the ellipsis, got:\n%s", out)
+	}
+}
+
+// TestColumnLastDisabled verifies that last.max=0 hides the last-message
+// column even in column mode (the user opts out of the inline preview).
+func TestColumnLastDisabled(t *testing.T) {
+	sessions := []Session{
+		{ID: "a", Title: "the subject", LastMsg: "the last message", Modified: time.Now()},
+	}
+	m := testModel(previewColumn, sessions)
+	m.colCfg.Last.Max = 0
+	out := m.View()
+	if strings.Contains(out, "the last message") {
+		t.Errorf("disabled last column should not show the message, got:\n%s", out)
+	}
+	if !strings.Contains(out, "the subject") {
+		t.Errorf("subject should still be shown, got:\n%s", out)
+	}
+}
+
+// TestColumnSubjectCap verifies that the subject is capped at title.max
+// in column mode, with the last message taking whatever's left.
+func TestColumnSubjectCap(t *testing.T) {
+	longSubject := strings.Repeat("s", 200)
+	sessions := []Session{
+		{ID: "a", Title: longSubject, LastMsg: "tail", Modified: time.Now()},
+	}
+	m := testModel(previewColumn, sessions)
+	m.colCfg.Title.Max = 20
+	out := m.View()
+	if strings.Contains(out, longSubject) {
+		t.Errorf("title.max=20 should truncate 200-char subject, got:\n%s", out)
+	}
+	if !strings.Contains(out, "tail") {
+		t.Errorf("last message should still be shown, got:\n%s", out)
 	}
 }

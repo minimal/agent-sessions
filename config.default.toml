@@ -91,6 +91,20 @@ branch = ""   # nf-pl-branch
 # full path either way.
 project = "full"
 
+[columns]
+# Width bounds for each column. The "content" columns (dir, branch, pane,
+# title) size to the longest value across visible sessions, clamped
+# between min and max. The "last" column uses the config directly -- last
+# messages are always long, so the bound is the column width.
+#
+# Set max = 0 to hide the column entirely. Setting min = max pins the
+# column to a fixed width, restoring the old behaviour.
+dir    = { min = 8,  max = 28 }   # the project column
+branch = { min = 8,  max = 24 }   # the git branch column
+pane   = { min = 0,  max = 12 }   # the tmux pane; min=0 lets it collapse
+title  = { min = 0,  max = 30 }   # the session title (cap in preview "column" mode)
+last   = { min = 0,  max = 100 }  # the last message (preview "column" mode only)
+
 [sort]
 # How to order the index: a comma-separated list of dimensions, most
 # significant first. Recency (newest activity, live floated up) is always the
