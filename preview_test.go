@@ -461,6 +461,74 @@ func TestTmuxGlyphDisabled(t *testing.T) {
 	}
 }
 
+func TestAgentGlyph(t *testing.T) {
+	var cfg Config
+	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	m := newModel(cfg)
+
+	cases := map[string]struct {
+		glyph string
+		color string
+	}{
+		"claude":  {"✻", "208"},
+		"pi":      {"◆", "12"},
+		"copilot": {"", "10"},
+	}
+	for source, want := range cases {
+		if got := m.agentGlyphs[source]; got != want.glyph {
+			t.Errorf("%s glyph = %q, want %q", source, got, want.glyph)
+		}
+		if got := m.agentStyles[source].GetForeground(); got != lipgloss.Color(want.color) {
+			t.Errorf("%s color = %v, want %s", source, got, want.color)
+		}
+		if got := m.agentCell(Session{Source: source}); !strings.Contains(got, want.glyph) {
+			t.Errorf("%s cell = %q, want glyph %q", source, got, want.glyph)
+		}
+	}
+}
+
+func TestAgentGlyphAlignment(t *testing.T) {
+	m := model{agentGlyphs: map[string]string{"claude": "C", "pi": "界"}}
+	m.colAgentGlyph = agentGlyphWidth(m.agentGlyphs)
+
+	wantWidth := 2 + lipgloss.Width("界")
+	for _, source := range []string{"claude", "pi", "unknown"} {
+		if got := lipgloss.Width(m.agentCell(Session{Source: source})); got != wantWidth {
+			t.Errorf("%s cell width = %d, want %d", source, got, wantWidth)
+		}
+	}
+
+	m.colAgentGlyph = 0
+	if got := m.agentCell(Session{Source: "claude"}); got != "" {
+		t.Errorf("disabled source glyphs should yield no slot, got %q", got)
+	}
+}
+
+func TestAgentGlyphRender(t *testing.T) {
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(prev)
+
+	var cfg Config
+	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	m := newModel(cfg)
+	now := time.Now()
+	m.sessions = []Session{{ID: "c", Source: "claude", Title: "session", Modified: now, Activity: now}}
+	m.width, m.height = 120, 10
+
+	out := m.renderRow(0, true, lipgloss.NewStyle(), false)
+	if !strings.Contains(out, cfg.Sources.Claude.Glyph) {
+		t.Errorf("row should contain the source glyph, got %q", out)
+	}
+	if !strings.Contains(out, "38;5;208") {
+		t.Errorf("row should color the claude glyph orange, got %q", out)
+	}
+}
+
 func glyphModel() model {
 	m := model{
 		glyphs: map[marker]string{

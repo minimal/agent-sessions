@@ -33,11 +33,11 @@ type Config struct {
 		Bar      StyleConfig `toml:"bar"`
 		Selected StyleConfig `toml:"selected"`
 		Preview  StyleConfig `toml:"preview"`
-		Index    StyleConfig `toml:"index"`   // the leading row number
-		Time     StyleConfig `toml:"time"`    // the last-activity timestamp
-		Project  StyleConfig `toml:"project"` // the directory column
-		Branch   StyleConfig `toml:"branch"`  // the git branch column
-		Subject  StyleConfig `toml:"subject"` // the session title column
+		Index    StyleConfig `toml:"index"`    // the leading row number
+		Time     StyleConfig `toml:"time"`     // the last-activity timestamp
+		Project  StyleConfig `toml:"project"`  // the directory column
+		Branch   StyleConfig `toml:"branch"`   // the git branch column
+		Subject  StyleConfig `toml:"subject"`  // the session title column
 		Worktree StyleConfig `toml:"worktree"` // marker shown next to worktree projects
 	} `toml:"styles"`
 	Commands map[string]string `toml:"commands"`
@@ -75,7 +75,7 @@ type Config struct {
 		Recent int    `toml:"recent"` // max recent sessions to always preview
 		Within string `toml:"within"` // recency window, a Go duration string
 	} `toml:"preview"`
-	Columns ColumnBounds `toml:"columns"`
+	Columns  ColumnBounds `toml:"columns"`
 	Worktree struct {
 		Glyph string `toml:"glyph"` // marker on worktree projects; "" hides it
 	} `toml:"worktree"`
@@ -105,16 +105,22 @@ type Config struct {
 		Claude struct {
 			Enabled bool   `toml:"enabled"`
 			Enter   string `toml:"enter"` // overrides the "enter" command for claude sessions
+			Glyph   string `toml:"glyph"` // identifies claude sessions; "" hides it
+			Color   string `toml:"color"` // glyph colour; "" uses the default text colour
 		} `toml:"claude"`
 		Pi struct {
 			Enabled    bool   `toml:"enabled"`
 			SessionDir string `toml:"session_dir"` // "" = $PI_CODING_AGENT_SESSION_DIR or ~/.pi/agent/sessions
 			Enter      string `toml:"enter"`       // overrides the "enter" command for pi sessions
+			Glyph      string `toml:"glyph"`       // identifies pi sessions; "" hides it
+			Color      string `toml:"color"`       // glyph colour; "" uses the default text colour
 		} `toml:"pi"`
 		Copilot struct {
 			Enabled    bool   `toml:"enabled"`
 			SessionDir string `toml:"session_dir"` // "" = $COPILOT_HOME/session-state or ~/.copilot/session-state
 			Enter      string `toml:"enter"`       // overrides the "enter" command for copilot sessions
+			Glyph      string `toml:"glyph"`       // identifies copilot sessions; "" hides it
+			Color      string `toml:"color"`       // glyph colour; "" uses the default text colour
 		} `toml:"copilot"`
 	} `toml:"sources"`
 }

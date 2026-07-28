@@ -135,7 +135,10 @@ type model struct {
 	bgExec         bool              // run key-bound commands detached (no terminal takeover)
 	enterBySource  map[string]string // per-source override of the "enter" command (key = Source)
 	tmuxGlyph      string            // marker for tmux-attachable sessions; "" hides it
-	worktreeGlyph  string            // marker for worktree projects; "" hides the slot entirely
+	agentGlyphs    map[string]string // marker keyed by Session.Source
+	agentStyles    map[string]lipgloss.Style
+	colAgentGlyph  int    // display width reserved for the widest source glyph
+	worktreeGlyph  string // marker for worktree projects; "" hides the slot entirely
 	glyphs         map[marker]string
 	colGlyph       int                               // display width reserved for the status glyph
 	showWords      bool                              // show the state word next to the glyph
@@ -242,6 +245,21 @@ func newModel(cfg Config) model {
 	if cfg.Sources.Copilot.Enter != "" {
 		enterBySource["copilot"] = cfg.Sources.Copilot.Enter
 	}
+	agentGlyphs := map[string]string{
+		"claude":  cfg.Sources.Claude.Glyph,
+		"pi":      cfg.Sources.Pi.Glyph,
+		"copilot": cfg.Sources.Copilot.Glyph,
+	}
+	agentStyles := map[string]lipgloss.Style{}
+	for source, color := range map[string]string{
+		"claude":  cfg.Sources.Claude.Color,
+		"pi":      cfg.Sources.Pi.Color,
+		"copilot": cfg.Sources.Copilot.Color,
+	} {
+		if color != "" {
+			agentStyles[source] = lipgloss.NewStyle().Foreground(lipgloss.Color(color))
+		}
+	}
 	m := model{
 		loader:         newMultiLoader(adapters, cfg.SortDims()),
 		styles:         newStyles(cfg),
@@ -250,6 +268,9 @@ func newModel(cfg Config) model {
 		bgExec:         cfg.Background,
 		enterBySource:  enterBySource,
 		tmuxGlyph:      cfg.Tmux.Glyph,
+		agentGlyphs:    agentGlyphs,
+		agentStyles:    agentStyles,
+		colAgentGlyph:  agentGlyphWidth(agentGlyphs),
 		worktreeGlyph:  cfg.Worktree.Glyph,
 		glyphs:         glyphs,
 		colGlyph:       glyphWidth(glyphs),
@@ -448,6 +469,14 @@ func glyphWidth(glyphs map[marker]string) int {
 			g = spinnerFrames[0]
 		}
 		w = max(w, lipgloss.Width(g))
+	}
+	return w
+}
+
+func agentGlyphWidth(glyphs map[string]string) int {
+	w := 0
+	for _, glyph := range glyphs {
+		w = max(w, lipgloss.Width(glyph))
 	}
 	return w
 }
@@ -1468,9 +1497,9 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 
 	mk := m.markerFor(s)
 	var b strings.Builder
-	// Prefix: index, status group (status + state word + tmux marker), and
-	// time. All fixed-width; the time cell has no trailing gap -- the first
-	// emit() call below adds it.
+	// Prefix: index, status group (status + state word + tmux and source
+	// markers), and time. All fixed-width; the time cell has no trailing gap
+	// -- the first emit() call below adds it.
 	b.WriteString(seg(m.styles.index, fmt.Sprintf("%4d", idx+1)))
 	b.WriteString(gap(1))
 	b.WriteString(statusSeg(m.styleFor(mk), mk, m.statusCell(mk)))
@@ -1483,6 +1512,7 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 		b.WriteString(statusSeg(st, wordMarker(s.State), w))
 	}
 	b.WriteString(seg(lipgloss.NewStyle(), m.tmuxCell(s)))
+	b.WriteString(seg(m.agentStyles[s.Source], m.agentCell(s)))
 	b.WriteString(gap(2))
 	b.WriteString(seg(m.styles.time, s.When().Format("Jan 02 15:04")))
 
@@ -1764,6 +1794,16 @@ func (m model) tmuxCell(s Session) string {
 		return "  " + m.tmuxGlyph
 	}
 	return "  " + strings.Repeat(" ", lipgloss.Width(m.tmuxGlyph))
+}
+
+// agentCell is the fixed-width source marker slot. It reserves the widest
+// configured glyph so sources stay aligned even when their glyphs differ in
+// display width. If every glyph is disabled, the slot disappears entirely.
+func (m model) agentCell(s Session) string {
+	if m.colAgentGlyph == 0 {
+		return ""
+	}
+	return "  " + pad(m.agentGlyphs[s.Source], m.colAgentGlyph)
 }
 
 // worktreeCell is the fixed-width worktree marker slot, between the project
