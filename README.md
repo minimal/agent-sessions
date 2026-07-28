@@ -104,8 +104,8 @@ the `Adapter` interface plus a `[sources.<name>]` entry — see `ADAPTERS.md`.
 | `j` / `k`, arrows | move down / up |
 | `Enter` | jump to a live session's tmux pane; resume a dead session |
 | `/` | search: filter the list as you type, across all projects |
-| `f` | filter the list to one project, chosen via the project picker |
-| `Esc` | clear the search and project filters |
+| `f` | filter menu: `p` filters by project, `b` by branch (chosen via the picker) |
+| `Esc` | clear the search and project/branch filters |
 | `g` / `G` | first / last session |
 | `ctrl+d` / `ctrl+u` | half page down / up |
 | `d` | delete the session after a y/n confirmation |
@@ -119,9 +119,12 @@ offer that session — nothing a running Claude Code depends on. Sessions
 with a live claude process are refused.
 
 `/` matches case-insensitively against each session's title, project path,
-branch, and session id. `f` filters the list to a single project via the
-project picker. Both filters are shown in the status bar, combine with each
-other, and stay until `Esc` clears them.
+branch, and session id. `f` opens the filter menu: the top bar lists the
+follow-up keys, `p` filters the list to a single project and `b` to a
+single branch, each chosen via the picker (when a project filter is active,
+the branch picker offers only that project's branches). `Esc` — or any
+unbound key — cancels the menu. The filters are shown in the status bar,
+combine with each other, and stay until `Esc` clears them.
 
 The picker is fzf-style: just start typing to narrow the list (a
 subsequence match, so `agt` finds `agent-sessions`), move with the arrows
