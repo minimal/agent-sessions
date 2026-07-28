@@ -189,7 +189,7 @@ words = true
 [preview]
 # How to show each session's last assistant message. mode is "row" (a
 # detail line beneath the session), "column" (an inline column), or "off".
-mode = "row"
+mode = "column"
 recent = 5      # in row mode, always preview this many recent sessions...
 within = "20m"  # ...modified within this window (a Go duration)
 
