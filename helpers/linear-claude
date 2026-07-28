@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# linear-claude <project-dir> <linear-ticket>
+#
+# Fetch a Linear ticket (e.g. PITCH-1234) via the linear CLI
+# (https://github.com/schpet/linear-cli), switch to a worktrunk (wt)
+# worktree on Linear's suggested branch name for it — creating the branch
+# unless it already exists — then start claude in a fresh tmux window,
+# prompted to implement the ticket.
+#
+# Needs jq and an authenticated linear CLI (linear auth login).
+#
+# Suggested binding:
+#   L = "linear-claude {project-picker} {text-input:Linear ticket}"
+set -euo pipefail
+
+proj=$1
+ticket=$2
+
+cd "$proj"
+
+resp=$(linear issue view "$ticket" --json --no-comments)
+
+branch=$(jq -r '.branchName // empty' <<<"$resp")
+if [ -z "$branch" ]; then
+    echo "Could not resolve ticket '$ticket'; response was:" >&2
+    printf '%s\n' "$resp" >&2
+    exit 1
+fi
+ident=$(jq -r '.identifier' <<<"$resp")
+title=$(jq -r '.title' <<<"$resp")
+desc=$(jq -r '.description // ""' <<<"$resp")
+url=$(jq -r '.url' <<<"$resp")
+
+echo "$ident: $title"
+echo "branch: $branch"
+
+# In interactive shells `wt` is a function wrapper around the binary; the
+# binary asks the caller to cd by writing to these directive files, so
+# replicate the wrapper's handling here.
+cd_file=$(mktemp)
+exec_file=$(mktemp)
+trap 'rm -f "$cd_file" "$exec_file"' EXIT
+export WORKTRUNK_DIRECTIVE_CD_FILE=$cd_file
+export WORKTRUNK_DIRECTIVE_EXEC_FILE=$exec_file
+
+if git rev-parse --verify --quiet "refs/heads/$branch" >/dev/null \
+    || git rev-parse --verify --quiet "refs/remotes/origin/$branch" >/dev/null; then
+    echo "Branch $branch already exists; switching to it."
+    wt switch "$branch"
+else
+    wt switch --create "$branch"
+fi
+
+[ -s "$cd_file" ] && cd "$(<"$cd_file")"
+[ -s "$exec_file" ] && . "$exec_file" || true
+
+prompt="Please implement Linear ticket $ident: $title
+
+$desc
+
+Ticket URL: $url"
+
+# Start the window as an interactive shell (rc files, version managers,
+# per-directory envs all apply) and type the claude command into it.
+win=$(tmux new-window -P -F '#{pane_id}' -c "$PWD")
+tmux send-keys -t "$win" "claude $(printf '%q' "$prompt")" Enter

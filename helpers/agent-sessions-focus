@@ -1,0 +1,14 @@
+#!/bin/sh
+# Jump to the pane running agent-sessions, starting it if absent.
+pane=$(tmux list-panes -a -F '#{pane_id} #{pane_current_command}' \
+    | awk '$2 == "agent-sessions" {print $1; exit}')
+if [ -n "$pane" ]; then
+    tmux select-window -t "$pane"
+    tmux select-pane -t "$pane"
+    tmux switch-client -t "$pane"
+else
+    # Start via the window's interactive shell so the TUI (and every
+    # command it runs) gets the full user environment.
+    win=$(tmux new-window -P -F '#{pane_id}' -n sessions)
+    tmux send-keys -t "$win" 'exec agent-sessions' Enter
+fi

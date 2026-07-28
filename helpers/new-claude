@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# new-claude <project-dir> <first-prompt>
+#
+# Bound to 'c' in agent-sessions: switch to a worktree via worktrunk
+# (optionally creating one), then start claude in a fresh tmux window
+# with the given prompt.
+set -e
+
+proj=$1
+prompt=$2
+
+cd "$proj"
+
+printf 'Create new worktree branch? [y/N] '
+read -r ans
+
+# In interactive shells `wt` is a function wrapper around the binary; the
+# binary asks the caller to cd by writing to these directive files, so
+# replicate the wrapper's handling here.
+cd_file=$(mktemp)
+exec_file=$(mktemp)
+trap 'rm -f "$cd_file" "$exec_file"' EXIT
+export WORKTRUNK_DIRECTIVE_CD_FILE=$cd_file
+export WORKTRUNK_DIRECTIVE_EXEC_FILE=$exec_file
+
+case $ans in
+    [yY]*)
+        printf 'Branch name (none for the wt picker): '
+        read -r branch
+        if git rev-parse --verify --quiet "refs/heads/$branch" >/dev/null \
+            || git rev-parse --verify --quiet "refs/remotes/origin/$branch" >/dev/null; then
+            echo "Branch $branch already exists; switching to it."
+            wt switch "$branch"
+        else
+            wt switch --create "$branch"
+        fi
+        ;;
+    *)
+        wt switch # worktrunk's own interactive branch picker
+        ;;
+esac
+
+[ -s "$cd_file" ] && cd "$(<"$cd_file")"
+[ -s "$exec_file" ] && . "$exec_file" || true
+
+# Start the window as an interactive shell (rc files, asdf, direnv all
+# apply) and type the claude command into it.
+win=$(tmux new-window -P -F '#{pane_id}' -c "$PWD")
+tmux send-keys -t "$win" "claude $(printf '%q' "$prompt")" Enter
