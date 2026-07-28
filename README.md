@@ -123,6 +123,11 @@ branch, and session id. `f` filters the list to a single project via the
 project picker. Both filters are shown in the status bar, combine with each
 other, and stay until `Esc` clears them.
 
+The picker is fzf-style: just start typing to narrow the list (a
+subsequence match, so `agt` finds `agent-sessions`), move with the arrows
+or `ctrl+j`/`ctrl+k`, pick with `Enter`, cancel with `Esc`. It is the
+default selection UI, used anywhere a choice is asked for.
+
 `Enter` runs a configurable shell command (see below). For a live session
 the default finds the tmux pane whose process tree contains the session's
 `claude` process and jumps there: inside tmux it switches the current
@@ -372,7 +377,8 @@ For anything more elaborate, hand the facts to a script and decide there:
 The two interactive placeholders resolve one after another before the
 command runs, and compose freely with the rest. `{project-picker}` lists
 every known project (the distinct working directories across all sessions,
-most recently used first). `{text-input}` accepts an optional label after a
+most recently used first) in the type-to-narrow picker described above.
+`{text-input}` accepts an optional label after a
 colon that names the prompt: `{text-input:Prompt}`. `Esc` at any step
 cancels the whole command.
 

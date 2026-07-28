@@ -273,16 +273,69 @@ func newModel(cfg Config) model {
 	return m
 }
 
-// pickerState is the project-selection overlay, opened either by a command
-// containing {project-picker} or by the f (filter by project) key.
+// pickerState is the generic selection overlay: a titled list the user
+// narrows by typing (fzf-style subsequence matching) and picks from with
+// Enter. It is the default way to ask for a choice — openPicker sets one
+// up and the onPick callback receives the chosen item.
 type pickerState struct {
 	active bool
-	filter bool     // the pick becomes the project filter, not a command var
-	items  []string // project cwds, most recently used first
+	title  string              // shown in the top bar, e.g. "Select a project"
+	label  func(string) string // renders an item; nil means identity
+	all    []string            // every item
+	items  []string            // all, narrowed by the query
+	query  string              // the narrowing text; edited via model.input
 	cursor int
 	offset int
-	tmpl   string            // the command awaiting the pick
-	vars   map[string]string // expansion vars captured at keypress
+	onPick func(model, string) (tea.Model, tea.Cmd)
+}
+
+// openPicker asks the user to choose one of items: typing narrows the list,
+// arrows and ctrl+j/k move, Enter hands the choice to onPick, Esc cancels.
+// label controls how items are displayed (and matched); pass nil for the
+// items themselves.
+func (m *model) openPicker(title string, items []string, label func(string) string, onPick func(model, string) (tea.Model, tea.Cmd)) {
+	m.picker = pickerState{active: true, title: title, label: label, all: items, items: items, onPick: onPick}
+	m.input = newLineInput()
+}
+
+// labelOf is how an item appears in the list.
+func (p pickerState) labelOf(item string) string {
+	if p.label == nil {
+		return item
+	}
+	return p.label(item)
+}
+
+// applyQuery narrows the items to those the query matches and resets the
+// cursor to the top, like fzf.
+func (p *pickerState) applyQuery() {
+	p.items = p.all
+	if p.query != "" {
+		p.items = nil
+		for _, it := range p.all {
+			if fuzzyMatch(p.query, p.labelOf(it)) {
+				p.items = append(p.items, it)
+			}
+		}
+	}
+	p.cursor = 0
+	p.offset = 0
+}
+
+// fuzzyMatch reports whether query's runes appear in s in order, ignoring
+// case — fzf's default matching. The empty query matches everything.
+func fuzzyMatch(query, s string) bool {
+	qr := []rune(strings.ToLower(query))
+	qi := 0
+	for _, r := range strings.ToLower(s) {
+		if qi == len(qr) {
+			break
+		}
+		if r == qr[qi] {
+			qi++
+		}
+	}
+	return qi == len(qr)
 }
 
 // promptState is the one-line text prompt shown while a command containing
@@ -580,7 +633,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input = newLineInput()
 			m.applyFilter()
 		case "f":
-			m.picker = pickerState{active: true, filter: true, items: m.projectList()}
+			m.openPicker("Filter by project", m.projectList(), displayPath,
+				func(m model, choice string) (tea.Model, tea.Cmd) {
+					m.project = choice
+					m.applyFilter()
+					return m, nil
+				})
 		case "o":
 			m.liveOnly = !m.liveOnly
 			m.applyFilter()
@@ -737,7 +795,11 @@ func (m model) runCommand(tmpl string) (tea.Model, tea.Cmd) {
 // the command once none remain.
 func (m model) continueCommand(tmpl string, vars map[string]string) (tea.Model, tea.Cmd) {
 	if strings.Contains(tmpl, "{project-picker}") && vars["project-picker"] == "" {
-		m.picker = pickerState{active: true, items: m.projectList(), tmpl: tmpl, vars: vars}
+		m.openPicker("Select a project", m.projectList(), displayPath,
+			func(m model, choice string) (tea.Model, tea.Cmd) {
+				vars["project-picker"] = choice
+				return m.continueCommand(tmpl, vars)
+			})
 		return m, nil
 	}
 	if match := textInputRe.FindStringSubmatch(tmpl); match != nil {
@@ -766,36 +828,38 @@ func (m model) projectList() []string {
 	return out
 }
 
-// handlePickerKey drives the project-selection overlay.
+// handlePickerKey drives the selection overlay: movement keys navigate,
+// Enter picks via onPick, Esc cancels, ctrl+c quits, and every other key
+// edits the narrowing query (so the keys you press first narrow the list,
+// then arrow/Enter pick from what remains).
 func (m model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	p := &m.picker
 	switch msg.String() {
-	case "esc", "q":
+	case "esc":
 		m.picker = pickerState{}
+		return m, nil
+	case "ctrl+c":
+		return m, tea.Quit
 	case "enter":
 		if len(p.items) == 0 {
 			m.picker = pickerState{}
-			break
+			return m, nil
 		}
-		choice := p.items[p.cursor]
-		if p.filter {
-			m.picker = pickerState{}
-			m.project = choice
-			m.applyFilter()
-			break
-		}
-		p.vars["project-picker"] = choice
-		tmpl, vars := p.tmpl, p.vars
+		choice, onPick := p.items[p.cursor], p.onPick
 		m.picker = pickerState{}
-		return m.continueCommand(tmpl, vars)
-	case "j", "down":
-		p.cursor = min(p.cursor+1, max(0, len(p.items)-1))
-	case "k", "up":
+		return onPick(m, choice)
+	case "up", "ctrl+k", "ctrl+p":
 		p.cursor = max(p.cursor-1, 0)
-	case "g", "home":
-		p.cursor = 0
-	case "G", "end":
-		p.cursor = max(0, len(p.items)-1)
+	case "down", "ctrl+j", "ctrl+n":
+		p.cursor = min(p.cursor+1, max(0, len(p.items)-1))
+	default:
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		if v := m.input.Value(); v != p.query {
+			p.query = v
+			p.applyQuery()
+		}
+		return m, cmd
 	}
 	if p.cursor < p.offset {
 		p.offset = p.cursor
@@ -1130,24 +1194,27 @@ func (m model) View() string {
 	return b.String()
 }
 
-// pickerView renders the project-selection overlay.
+// pickerView renders the selection overlay: the narrowed item list, with
+// the query editor and match count in the bottom bar.
 func (m model) pickerView() string {
+	p := m.picker
 	var b strings.Builder
-	b.WriteString(m.styles.bar.Render(pad("Select a project", m.width)))
+	b.WriteString(m.styles.bar.Render(pad(p.title, m.width)))
 	b.WriteString("\n")
 	page := m.pageSize()
 	for i := 0; i < page; i++ {
-		idx := m.picker.offset + i
-		if idx < len(m.picker.items) {
-			line := trunc(fmt.Sprintf("%4d  %s", idx+1, displayPath(m.picker.items[idx])), m.width)
-			if idx == m.picker.cursor {
+		idx := p.offset + i
+		if idx < len(p.items) {
+			line := trunc(fmt.Sprintf("%4d  %s", idx+1, p.labelOf(p.items[idx])), m.width)
+			if idx == p.cursor {
 				line = m.styles.selected.Render(pad(line, m.width))
 			}
 			b.WriteString(line)
 		}
 		b.WriteString("\n")
 	}
-	status := fmt.Sprintf("---Select a project: %d known---(Enter:Pick Esc:Cancel)", len(m.picker.items))
+	status := fmt.Sprintf("---%s: %s---(%d/%d, Enter:Pick Esc:Cancel)",
+		p.title, m.inputView(p.title+": "), len(p.items), len(p.all))
 	b.WriteString(m.styles.bar.Render(pad(status, m.width)))
 	return b.String()
 }
@@ -1172,6 +1239,12 @@ func (m model) helpView() string {
 		"    r                  refresh now",
 		"    ?                  this help",
 		"    q                  quit",
+		"",
+		"  Picker (selecting from a list, e.g. projects)",
+		"    type               narrow the list (fzf-style subsequence match)",
+		"    arrows, ctrl+j/k   move",
+		"    Enter              pick the highlighted item",
+		"    Esc                cancel",
 		"",
 		"  Columns (see [columns] in your config)",
 		"    The content columns (dir, branch, pane, title) size to the longest",
