@@ -78,6 +78,10 @@ fg = "5"
 
 [styles.subject]   # the session title column (left unset = default text colour)
 
+[styles.worktree]  # marker shown next to worktree projects
+fg = "3"
+bold = true
+
 [icons]
 # Glyphs shown before the directory and branch columns. Defaults are Nerd Font
 # icons (need a Nerd Font in your terminal); set either to "" to hide it, or a
@@ -104,6 +108,11 @@ branch = { min = 8,  max = 24 }   # the git branch column
 pane   = { min = 0,  max = 12 }   # the tmux pane; min=0 lets it collapse
 title  = { min = 0,  max = 30 }   # the session title (cap in preview "column" mode)
 last   = { min = 0,  max = 100 }  # the last message (preview "column" mode only)
+
+[worktree]
+# Marker shown next to projects that are git worktrees (not the main repo).
+# Set to "" to hide it.
+glyph = "wt"
 
 [sort]
 # How to order the index: a comma-separated list of dimensions, most

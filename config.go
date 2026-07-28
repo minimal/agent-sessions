@@ -38,6 +38,7 @@ type Config struct {
 		Project  StyleConfig `toml:"project"` // the directory column
 		Branch   StyleConfig `toml:"branch"`  // the git branch column
 		Subject  StyleConfig `toml:"subject"` // the session title column
+		Worktree StyleConfig `toml:"worktree"` // marker shown next to worktree projects
 	} `toml:"styles"`
 	Commands map[string]string `toml:"commands"`
 	CircleCI struct {
@@ -75,6 +76,9 @@ type Config struct {
 		Within string `toml:"within"` // recency window, a Go duration string
 	} `toml:"preview"`
 	Columns ColumnBounds `toml:"columns"`
+	Worktree struct {
+		Glyph string `toml:"glyph"` // marker on worktree projects; "" hides it
+	} `toml:"worktree"`
 	Tmux struct {
 		Glyph string `toml:"glyph"` // marker on tmux-attachable sessions; "" hides it
 	} `toml:"tmux"`

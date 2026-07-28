@@ -186,6 +186,36 @@ func worktreeGitDir(base, gitFile string) string {
 	return gitdir
 }
 
+// isWorktree reports whether cwd is a linked git worktree, distinguished from
+// the main repo by <cwd>/.git being a file (the pointer git writes for a
+// linked worktree) rather than a directory. Returns false for non-git
+// directories and empty cwd.
+func isWorktree(cwd string) bool {
+	if cwd == "" {
+		return false
+	}
+	fi, err := os.Stat(filepath.Join(cwd, ".git"))
+	if err != nil {
+		return false
+	}
+	return !fi.IsDir()
+}
+
+// isWorktreeCached is isWorktree with a per-load memoisation keyed on cwd.
+// multiLoader runs once per refresh; the cache is a small map local to that
+// pass, so two sessions sharing a cwd only stat once.
+func isWorktreeCached(cwd string, cache map[string]bool) bool {
+	if cwd == "" {
+		return false
+	}
+	if w, ok := cache[cwd]; ok {
+		return w
+	}
+	w := isWorktree(cwd)
+	cache[cwd] = w
+	return w
+}
+
 // multiLoader runs every enabled adapter and merges their sessions into one
 // freshest-first list with live state attached. It stands in for the old
 // single-source loader: the UI calls Load() and stays source-agnostic. The
@@ -214,9 +244,14 @@ func (ml *multiLoader) Load() ([]Session, error) {
 	}
 	// Resolve each session's git repo key (shared across worktrees) so the
 	// dimRepo sort can cluster a repo's sessions. Memoised within one load.
+	// Worktree is set alongside, in the same pass, so the [worktree] marker
+	// can distinguish a linked worktree from the main repo without an extra
+	// stat per session.
 	repos := map[string]string{}
+	worktrees := map[string]bool{}
 	for i := range all {
 		all[i].Repo = repoKeyCached(all[i].CWD, repos)
+		all[i].Worktree = isWorktreeCached(all[i].CWD, worktrees)
 	}
 	sortSessions(all, ml.sortDims)
 	return all, nil

@@ -102,3 +102,60 @@ func TestGitBranch(t *testing.T) {
 		t.Errorf("gitBranch(bogus .git file) = %q, want \"\"", got)
 	}
 }
+
+// TestIsWorktree covers the isWorktree / isWorktreeCached pair: an empty cwd,
+// a directory with no .git, a main-worktree .git directory, and a linked
+// worktree's .git file. The function's only job is to read "<cwd>/.git" and
+// report whether it's a file (worktree) or a directory (main repo), so the
+// four cases here are the whole contract.
+func TestIsWorktree(t *testing.T) {
+	tmp := t.TempDir()
+
+	if isWorktree("") {
+		t.Error("isWorktree(\"\") = true, want false")
+	}
+
+	noGit := filepath.Join(tmp, "no-git")
+	if err := os.Mkdir(noGit, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if isWorktree(noGit) {
+		t.Error("isWorktree(no .git) = true, want false")
+	}
+
+	main := filepath.Join(tmp, "main")
+	if err := os.MkdirAll(filepath.Join(main, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if isWorktree(main) {
+		t.Error("isWorktree(.git is directory) = true, want false")
+	}
+
+	wt := filepath.Join(tmp, "wt")
+	if err := os.Mkdir(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: /some/main/.git/worktrees/wt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !isWorktree(wt) {
+		t.Error("isWorktree(.git is file) = false, want true")
+	}
+
+	// isWorktreeCached: second call for the same cwd doesn't re-stat.
+	cache := map[string]bool{}
+	if !isWorktreeCached(wt, cache) {
+		t.Error("isWorktreeCached(wt) = false, want true")
+	}
+	if !cache[wt] {
+		t.Error("cache should be populated for wt")
+	}
+	if isWorktreeCached(noGit, cache) {
+		t.Error("isWorktreeCached(no-git) = true, want false")
+	}
+	// A no-op repeat should not have stat'd again: the cached value is used.
+	cache[main] = true // poison the cache to prove isWorktreeCached trusts it
+	if !isWorktreeCached(main, cache) {
+		t.Error("isWorktreeCached should honour the cache, not re-stat")
+	}
+}

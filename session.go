@@ -41,6 +41,7 @@ type Session struct {
 	State    SessionState // empty unless Live
 	PID      int          // the running agent process; 0 unless Live
 	Pane     string       // session:window.pane hosting the process, if any
+	Worktree bool         // true if CWD is a linked git worktree (not the main repo)
 	Source   string       // which adapter produced this ("claude", "pi", ...)
 }
 

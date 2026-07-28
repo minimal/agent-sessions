@@ -73,6 +73,7 @@ type styles struct {
 	project  lipgloss.Style
 	branch   lipgloss.Style
 	subject  lipgloss.Style
+	worktree lipgloss.Style
 	state    map[SessionState]lipgloss.Style
 }
 
@@ -89,6 +90,7 @@ func newStyles(cfg Config) styles {
 		project:  cfg.Styles.Project.style(),
 		branch:   cfg.Styles.Branch.style(),
 		subject:  cfg.Styles.Subject.style(),
+		worktree: cfg.Styles.Worktree.style(),
 		state: map[SessionState]lipgloss.Style{
 			StateRunning: cfg.Styles.Running.style(),
 			StateWaiting: cfg.Styles.Waiting.style(),
@@ -133,6 +135,7 @@ type model struct {
 	bgExec         bool              // run key-bound commands detached (no terminal takeover)
 	enterBySource  map[string]string // per-source override of the "enter" command (key = Source)
 	tmuxGlyph      string            // marker for tmux-attachable sessions; "" hides it
+	worktreeGlyph  string            // marker for worktree projects; "" hides the slot entirely
 	glyphs         map[marker]string
 	colGlyph       int                               // display width reserved for the status glyph
 	showWords      bool                              // show the state word next to the glyph
@@ -238,6 +241,7 @@ func newModel(cfg Config) model {
 		bgExec:         cfg.Background,
 		enterBySource:  enterBySource,
 		tmuxGlyph:      cfg.Tmux.Glyph,
+		worktreeGlyph:  cfg.Worktree.Glyph,
 		glyphs:         glyphs,
 		colGlyph:       glyphWidth(glyphs),
 		showWords:      cfg.Status.Words,
@@ -1291,6 +1295,12 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 		emit(seg(m.styles.project, iconBody(m.dirIcon, project, m.widths.dir-dirOH)))
 	}
 
+	// worktree marker slot (between project and branch). It carries its own
+	// 2-space gap and is a fixed-width slot — not a dynamic column — so
+	// column-widths config doesn't apply. When the marker is disabled the
+	// slot disappears entirely.
+	b.WriteString(m.worktreeCell(s, colored))
+
 	// branch column, with an optional per-repo git icon prefix. When the git
 	// icon is on, the icon and the branch text share the repo's colour, so
 	// the whole git area reads as one colour-coded unit per repo.
@@ -1541,6 +1551,25 @@ func (m model) tmuxCell(s Session) string {
 		return "  " + m.tmuxGlyph
 	}
 	return "  " + strings.Repeat(" ", lipgloss.Width(m.tmuxGlyph))
+}
+
+// worktreeCell is the fixed-width worktree marker slot, between the project
+// and branch columns, holding the styled glyph for linked-worktree projects
+// and blank otherwise so the column stays aligned across rows. The slot is
+// empty (no whitespace) when the marker is disabled. When colored is false
+// (selected/dimmed rows in plain mode) the glyph is rendered unstyled so
+// the outer row style isn't interrupted.
+func (m model) worktreeCell(s Session, colored bool) string {
+	if m.worktreeGlyph == "" {
+		return ""
+	}
+	if s.Worktree {
+		if !colored {
+			return "  " + m.worktreeGlyph
+		}
+		return "  " + m.styles.worktree.Render(m.worktreeGlyph)
+	}
+	return "  " + strings.Repeat(" ", lipgloss.Width(m.worktreeGlyph))
 }
 
 // previewLine is the indented detail line shown beneath a session in "row"
