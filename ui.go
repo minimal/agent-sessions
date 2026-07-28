@@ -1297,9 +1297,10 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 
 	// worktree marker slot (between project and branch). It carries its own
 	// 2-space gap and is a fixed-width slot — not a dynamic column — so
-	// column-widths config doesn't apply. When the marker is disabled the
-	// slot disappears entirely.
-	b.WriteString(m.worktreeCell(s, colored))
+	// column-widths config doesn't apply. The seg() wrapper applies the
+	// worktree style and the row's sel overlay, so the selection bar
+	// extends through the slot instead of breaking around the marker.
+	b.WriteString(seg(m.styles.worktree, m.worktreeCell(s)))
 
 	// branch column, with an optional per-repo git icon prefix. When the git
 	// icon is on, the icon and the branch text share the repo's colour, so
@@ -1554,20 +1555,18 @@ func (m model) tmuxCell(s Session) string {
 }
 
 // worktreeCell is the fixed-width worktree marker slot, between the project
-// and branch columns, holding the styled glyph for linked-worktree projects
-// and blank otherwise so the column stays aligned across rows. The slot is
-// empty (no whitespace) when the marker is disabled. When colored is false
-// (selected/dimmed rows in plain mode) the glyph is rendered unstyled so
-// the outer row style isn't interrupted.
-func (m model) worktreeCell(s Session, colored bool) string {
+// and branch columns, holding the glyph for linked-worktree projects and
+// whitespace otherwise so the column stays aligned across rows. The slot is
+// empty (no whitespace) when the marker is disabled. The caller wraps the
+// result in seg() to apply the worktree style and the row's sel overlay —
+// doing the styling here would skip the sel overlay and leave a hole in the
+// selection bar.
+func (m model) worktreeCell(s Session) string {
 	if m.worktreeGlyph == "" {
 		return ""
 	}
 	if s.Worktree {
-		if !colored {
-			return "  " + m.worktreeGlyph
-		}
-		return "  " + m.styles.worktree.Render(m.worktreeGlyph)
+		return "  " + m.worktreeGlyph
 	}
 	return "  " + strings.Repeat(" ", lipgloss.Width(m.worktreeGlyph))
 }
