@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "sh \"${COPILOT_HOME:-$HOME/.copilot}/hooks/agent-sessions-marker.sh\" idle \"$PPID\" \"${TMUX_PANE:-}\"",
+        "timeoutSec": 5
+      }
+    ],
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "bash": "sh \"${COPILOT_HOME:-$HOME/.copilot}/hooks/agent-sessions-marker.sh\" running \"$PPID\" \"${TMUX_PANE:-}\"",
+        "timeoutSec": 10
+      }
+    ],
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "sh \"${COPILOT_HOME:-$HOME/.copilot}/hooks/agent-sessions-marker.sh\" running \"$PPID\" \"${TMUX_PANE:-}\"",
+        "timeoutSec": 5
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "sh \"${COPILOT_HOME:-$HOME/.copilot}/hooks/agent-sessions-marker.sh\" running \"$PPID\" \"${TMUX_PANE:-}\"",
+        "timeoutSec": 5
+      }
+    ],
+    "notification": [
+      {
+        "type": "command",
+        "bash": "sh \"${COPILOT_HOME:-$HOME/.copilot}/hooks/agent-sessions-marker.sh\" notify \"$PPID\" \"${TMUX_PANE:-}\"",
+        "timeoutSec": 10
+      }
+    ],
+    "agentStop": [
+      {
+        "type": "command",
+        "bash": "sh \"${COPILOT_HOME:-$HOME/.copilot}/hooks/agent-sessions-marker.sh\" idle \"$PPID\" \"${TMUX_PANE:-}\"",
+        "timeoutSec": 10
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "bash": "sh \"${COPILOT_HOME:-$HOME/.copilot}/hooks/agent-sessions-marker.sh\" delete \"$PPID\" \"${TMUX_PANE:-}\"",
+        "timeoutSec": 5
+      }
+    ]
+  }
+}

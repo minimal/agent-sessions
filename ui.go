@@ -229,12 +229,18 @@ func newModel(cfg Config) model {
 	if cfg.Sources.Pi.Enabled {
 		adapters = append(adapters, newPiAdapter(cfg.Sources.Pi.SessionDir))
 	}
+	if cfg.Sources.Copilot.Enabled {
+		adapters = append(adapters, newCopilotAdapter(cfg.Sources.Copilot.SessionDir))
+	}
 	enterBySource := map[string]string{}
 	if cfg.Sources.Claude.Enter != "" {
 		enterBySource["claude"] = cfg.Sources.Claude.Enter
 	}
 	if cfg.Sources.Pi.Enter != "" {
 		enterBySource["pi"] = cfg.Sources.Pi.Enter
+	}
+	if cfg.Sources.Copilot.Enter != "" {
+		enterBySource["copilot"] = cfg.Sources.Copilot.Enter
 	}
 	m := model{
 		loader:         newMultiLoader(adapters, cfg.SortDims()),
@@ -767,15 +773,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // the Claude-oriented global enter template.
 const piEnterBuiltin = `tmux select-pane -t {pane} && tmux select-window -t {pane} && tmux switch-client -t {pane} 2>/dev/null || (cd {cwd} && pi --session {id})`
 
+// copilotEnterBuiltin is the default resume/jump command for Copilot CLI
+// sessions, used when the user has no [sources.copilot]enter override. Like the
+// pi built-in, it jumps to the session's tmux pane if one is known, else
+// resumes the session in the current terminal (copilot --resume=<id>).
+const copilotEnterBuiltin = `tmux select-pane -t {pane} && tmux select-window -t {pane} && tmux switch-client -t {pane} 2>/dev/null || (cd {cwd} && copilot --resume={id})`
+
 // sourceEnterTemplate resolves the command template for a session's source.
-// Per-source overrides win; pi sessions without one fall back to the pi-
-// specific built-in instead of the Claude-oriented global default.
+// Per-source overrides win; pi and copilot sessions without one fall back to
+// their source-specific built-in instead of the Claude-oriented global default.
 func sourceEnterTemplate(source, global string, overrides map[string]string) string {
 	if cmd, ok := overrides[source]; ok && cmd != "" {
 		return cmd
 	}
-	if source == "pi" {
+	switch source {
+	case "pi":
 		return piEnterBuiltin
+	case "copilot":
+		return copilotEnterBuiltin
 	}
 	return global
 }
