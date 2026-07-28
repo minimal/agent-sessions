@@ -171,6 +171,7 @@ type model struct {
 	spin           int                     // running-spinner frame index
 	spinning       bool                    // a spinner tick is scheduled
 	showHelp       bool
+	helpOffset     int      // scroll position within the help screen
 	deleting       *Session // awaiting y/n confirmation to delete
 	picker         pickerState
 	prompt         promptState
@@ -533,7 +534,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.showHelp {
-			m.showHelp = false
+			switch msg.String() {
+			case "j", "down":
+				m.helpOffset++
+			case "k", "up":
+				m.helpOffset = max(0, m.helpOffset-1)
+			default:
+				m.showHelp = false
+				m.helpOffset = 0
+			}
 			return m, nil
 		}
 		if m.picker.active {
@@ -1186,6 +1195,20 @@ func (m model) helpView() string {
 			"",
 		)
 	}
+	lines = append(lines,
+		"  Command placeholders (values expand shell-quoted in [commands])",
+		"    {id}                the session id (as used by claude --resume)",
+		"    {cwd}               the session's working directory",
+		"    {file}              the session's transcript (.jsonl) path",
+		"    {state}             running/waiting/idle for live sessions, else empty",
+		"    {pid}               pid of the running claude process (live only)",
+		"    {pane}              tmux pane hosting the process (live, in tmux)",
+		"    {pid?} / {pane?}    optional forms: expand empty instead of blocking",
+		"    {ci-build-url}      the latest CircleCI build's page (needs [circleci])",
+		"    {project-picker}    asks: pick a project from every known one",
+		"    {text-input:Label}  asks: a line of text (the label is optional)",
+		"",
+	)
 	lines = append(lines, "  Commands (from config)")
 	keys := make([]string, 0, len(m.commands))
 	for k, tmpl := range m.commands {
@@ -1203,13 +1226,14 @@ func (m model) helpView() string {
 	b.WriteString(m.styles.bar.Render(pad("Help", m.width)))
 	b.WriteString("\n")
 	page := m.pageSize()
+	offset := min(m.helpOffset, max(0, len(lines)-page))
 	for i := 0; i < page; i++ {
-		if i < len(lines) {
-			b.WriteString(trunc(lines[i], m.width))
+		if idx := offset + i; idx < len(lines) {
+			b.WriteString(trunc(lines[idx], m.width))
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString(m.styles.bar.Render(pad("---Help---(press any key to return)", m.width)))
+	b.WriteString(m.styles.bar.Render(pad("---Help---(j/k scroll, any other key returns)", m.width)))
 	return b.String()
 }
 
