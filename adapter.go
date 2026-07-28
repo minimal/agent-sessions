@@ -133,11 +133,29 @@ func contentText(raw json.RawMessage) string {
 // it's cached with the transcript and only refreshed when the file changes — a
 // branch switch with no new message shows stale until the next write. That's
 // acceptable for a source with no live signal; live adapters can refresh it.
+//
+// In a linked worktree, <cwd>/.git is a file whose first line is
+// "gitdir: <path>" — the .git directory for that worktree, typically
+// "<main>/.git/worktrees/<name>" and reached via the main repo's gitdir. We
+// read HEAD from the resolved worktree gitdir instead of the .git file itself;
+// otherwise the file's contents ("gitdir: ...") would be parsed as the branch.
 func gitBranch(cwd string) string {
 	if cwd == "" {
 		return ""
 	}
-	data, err := os.ReadFile(filepath.Join(cwd, ".git", "HEAD"))
+	gitPath := filepath.Join(cwd, ".git")
+	fi, err := os.Stat(gitPath)
+	if err != nil {
+		return ""
+	}
+	headDir := gitPath
+	if !fi.IsDir() {
+		headDir = worktreeGitDir(cwd, gitPath)
+		if headDir == "" {
+			return ""
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(headDir, "HEAD"))
 	if err != nil {
 		return ""
 	}
@@ -146,6 +164,26 @@ func gitBranch(cwd string) string {
 		return ref
 	}
 	return s // detached HEAD: fall back to the sha
+}
+
+// worktreeGitDir resolves a linked worktree's ".git" pointer file to the
+// gitdir it names, re-anchoring a relative path against base (the worktree's
+// cwd, which is the directory holding the .git file). Returns "" if the file
+// can't be read or holds no "gitdir:" line.
+func worktreeGitDir(base, gitFile string) string {
+	data, err := os.ReadFile(gitFile)
+	if err != nil {
+		return ""
+	}
+	line, _, _ := strings.Cut(strings.TrimSpace(string(data)), "\n")
+	gitdir, ok := strings.CutPrefix(line, "gitdir: ")
+	if !ok {
+		return ""
+	}
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(base, gitdir)
+	}
+	return gitdir
 }
 
 // multiLoader runs every enabled adapter and merges their sessions into one
