@@ -44,14 +44,20 @@ func TestActivityIgnoresTimestamplessLines(t *testing.T) {
 	msgTS := "2026-07-02T19:08:41.637Z"
 	absorb(&s, transcriptLine{
 		Type: "assistant", Timestamp: msgTS,
-		Message: &struct {
-			Role    string          `json:"role"`
-			Content json.RawMessage `json:"content"`
-		}{Role: "assistant", Content: json.RawMessage(`"Done!"`)},
+		Message: &transcriptMessage{
+			Role: "assistant", Content: json.RawMessage(`"Done!"`), Model: "claude-opus-4-8",
+		},
 	})
 	want, _ := time.Parse(time.RFC3339, msgTS)
 	if !s.Activity.Equal(want) {
 		t.Fatalf("message line should set Activity to %v, got %v", want, s.Activity)
+	}
+	if s.Model != "claude-opus-4-8" {
+		t.Fatalf("assistant line should set Model, got %q", s.Model)
+	}
+	absorb(&s, transcriptLine{Type: "assistant", Message: &transcriptMessage{Role: "assistant"}})
+	if s.Model != "claude-opus-4-8" {
+		t.Errorf("empty assistant model must not erase Model, got %q", s.Model)
 	}
 	// A later mode/permission-mode write carries no timestamp and must not
 	// advance Activity — otherwise a stray mode change reorders the session.
@@ -821,6 +827,67 @@ func TestColumnWidthsRespectMax(t *testing.T) {
 	}
 }
 
+func TestModelColumn(t *testing.T) {
+	sessions := []Session{
+		{ID: "a", Title: "one", Model: "gpt-5.5", Modified: time.Now()},
+		{ID: "b", Title: "two", Model: "claude-sonnet-4.6", Modified: time.Now()},
+	}
+	m := testModel(previewRow, sessions)
+	if m.widths.model != lipgloss.Width("claude-sonnet-4.6") {
+		t.Fatalf("model width = %d, want widest visible model", m.widths.model)
+	}
+	out := m.View()
+	if !strings.Contains(out, "gpt-5.5") || !strings.Contains(out, "claude-sonnet-4.6") {
+		t.Errorf("model values should render, got:\n%s", out)
+	}
+	first := m.renderRow(0, false, lipgloss.NewStyle(), false)
+	second := m.renderRow(1, false, lipgloss.NewStyle(), false)
+	if strings.Index(first, "one") != strings.Index(second, "two") {
+		t.Errorf("different model lengths should keep following columns aligned:\n%s\n%s", first, second)
+	}
+
+	m.colCfg.Model.Max = 10
+	m.computeWidths()
+	out = m.View()
+	if m.widths.model != 10 {
+		t.Errorf("model width = %d, want configured max 10", m.widths.model)
+	}
+	if strings.Contains(out, "claude-sonnet-4.6") || !strings.Contains(out, "…") {
+		t.Errorf("long model should be truncated with an ellipsis, got:\n%s", out)
+	}
+}
+
+func TestModelColumnDisableAndCollapse(t *testing.T) {
+	withModel := testModel(previewRow, []Session{
+		{ID: "a", Title: "one", Model: "gpt-5.5", Modified: time.Now()},
+	})
+	withModel.width = 1000
+	visible := withModel.renderRow(0, false, lipgloss.NewStyle(), false)
+
+	withModel.colCfg.Model.Max = 0
+	withModel.computeWidths()
+	hidden := withModel.renderRow(0, false, lipgloss.NewStyle(), false)
+	if strings.Contains(hidden, "gpt-5.5") {
+		t.Errorf("disabled model column should hide its value, got:\n%s", hidden)
+	}
+	if lipgloss.Width(hidden) >= lipgloss.Width(visible) {
+		t.Errorf("disabled model column should remove its cell and gap")
+	}
+
+	withoutModel := testModel(previewRow, []Session{
+		{ID: "b", Title: "two", Modified: time.Now()},
+	})
+	if withoutModel.widths.model != 0 {
+		t.Errorf("all-empty model column should collapse, width = %d", withoutModel.widths.model)
+	}
+}
+
+func TestSessionMatchesModel(t *testing.T) {
+	if !(Session{Model: "claude-opus-4.8"}).matches("opus") {
+		t.Error("search should match the session model")
+	}
+}
+
 // TestColumnWidthsDisable verifies that max=0 hides the column: the cell
 // is not emitted and the value is absent from the row. The original pane
 // column was 12 chars of padding around a "0" value — turning it off here
@@ -891,6 +958,7 @@ func TestColumnWidthsConfigDefaults(t *testing.T) {
 	}{
 		{"dir", cfg.Columns.Dir.Max},
 		{"branch", cfg.Columns.Branch.Max},
+		{"model", cfg.Columns.Model.Max},
 		{"pane", cfg.Columns.Pane.Max},
 		{"title", cfg.Columns.Title.Max},
 		{"last", cfg.Columns.Last.Max},

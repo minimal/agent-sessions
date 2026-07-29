@@ -219,6 +219,42 @@ func TestParsePiMarkerStatus(t *testing.T) {
 	}
 }
 
+func TestPiModelTracking(t *testing.T) {
+	var s Session
+	absorbPi(&s, piLine{Type: "model_change", ModelID: "claude-haiku-4.5"})
+	if s.Model != "claude-haiku-4.5" {
+		t.Fatalf("model_change Model = %q", s.Model)
+	}
+
+	absorbPi(&s, piLine{
+		Type: "message",
+		Message: &piMessage{
+			Role: "assistant", Model: "claude-sonnet-4.6",
+		},
+	})
+	if s.Model != "claude-sonnet-4.6" {
+		t.Fatalf("assistant model Model = %q", s.Model)
+	}
+
+	absorbPi(&s, piLine{
+		Type: "message",
+		Message: &piMessage{
+			Role: "assistant", ModelID: "claude-opus-4.8",
+		},
+	})
+	if s.Model != "claude-opus-4.8" {
+		t.Fatalf("assistant modelId Model = %q", s.Model)
+	}
+
+	absorbPi(&s, piLine{Type: "message", Message: &piMessage{Role: "assistant"}})
+	if s.Model != "claude-opus-4.8" {
+		t.Errorf("empty assistant model must not erase Model, got %q", s.Model)
+	}
+	if !s.Activity.IsZero() {
+		t.Errorf("model-only events must not advance Activity, got %v", s.Activity)
+	}
+}
+
 func TestPiLiveMarkerISO8601Timestamp(t *testing.T) {
 	// The extension writes new Date().toISOString(). Ensure Go parses it.
 	jsonBlob := []byte(`{"sid":"x","pid":1,"status":"running","updated_at":"2026-07-05T12:34:56.789Z"}`)

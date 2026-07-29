@@ -37,6 +37,7 @@ type Config struct {
 		Time     StyleConfig `toml:"time"`     // the last-activity timestamp
 		Project  StyleConfig `toml:"project"`  // the directory column
 		Branch   StyleConfig `toml:"branch"`   // the git branch column
+		Model    StyleConfig `toml:"model"`    // the model column
 		Subject  StyleConfig `toml:"subject"`  // the session title column
 		Worktree StyleConfig `toml:"worktree"` // marker shown next to worktree projects
 	} `toml:"styles"`
@@ -126,7 +127,7 @@ type Config struct {
 }
 
 // ColumnConfig bounds the width of one column. For "content" columns (dir,
-// branch, pane, title) the width is clamp(observed, Min, Max), where
+// branch, model, pane, title) the width is clamp(observed, Min, Max), where
 // observed is the longest value across visible sessions. For the "last"
 // column the width is clamp(rest, Min, Max), where rest is whatever's left
 // of the row after the other columns -- last messages are always long, so
@@ -141,6 +142,7 @@ type ColumnConfig struct {
 type ColumnBounds struct {
 	Dir    ColumnConfig `toml:"dir"`    // the project column
 	Branch ColumnConfig `toml:"branch"` // the git branch column
+	Model  ColumnConfig `toml:"model"`  // the model column
 	Pane   ColumnConfig `toml:"pane"`   // the tmux pane
 	Title  ColumnConfig `toml:"title"`  // the session title (cap in preview "column" mode)
 	Last   ColumnConfig `toml:"last"`   // the last message (preview "column" mode only)

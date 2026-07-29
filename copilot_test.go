@@ -37,8 +37,9 @@ func TestCopilotSessionsParse(t *testing.T) {
 	writeCopilotSession(t, root, sid, []string{
 		`{"type":"session.start","timestamp":"2026-07-02T15:03:27.361Z","data":{"sessionId":"935ca4e7-60b5-4632-a109-4d242467eab1","context":{"cwd":"/home/chris/code/foo","branch":"my-branch"}}}`,
 		`{"type":"user.message","timestamp":"2026-07-02T15:04:00.000Z","data":{"content":"Do the thing\nsecond line"}}`,
-		`{"type":"assistant.message","timestamp":"2026-07-02T15:04:10.000Z","data":{"model":"gpt-5.5","content":"","toolRequests":[{"name":"shell"}]}}`,
+		`{"type":"assistant.message","timestamp":"2026-07-02T15:04:10.000Z","data":{"model":"gpt-5.4","content":"","toolRequests":[{"name":"shell"}]}}`,
 		`{"type":"assistant.message","timestamp":"2026-07-02T15:04:20.000Z","data":{"model":"gpt-5.5","content":"Here is the answer"}}`,
+		`{"type":"assistant.message","timestamp":"2026-07-02T15:04:21.000Z","data":{"content":""}}`,
 		// A late hook event must NOT advance Activity (hooks fire constantly).
 		`{"type":"hook.start","timestamp":"2026-07-02T18:00:00.000Z","data":{}}`,
 	}, "id: 935ca4e7-60b5-4632-a109-4d242467eab1\nname: My Session Title\nuser_named: false\n")
@@ -71,7 +72,10 @@ func TestCopilotSessionsParse(t *testing.T) {
 	if s.LastMsg != "Here is the answer" {
 		t.Errorf("LastMsg = %q, want the last non-empty assistant text", s.LastMsg)
 	}
-	want, _ := time.Parse(time.RFC3339, "2026-07-02T15:04:20.000Z")
+	if s.Model != "gpt-5.5" {
+		t.Errorf("Model = %q, want the last non-empty assistant model", s.Model)
+	}
+	want, _ := time.Parse(time.RFC3339, "2026-07-02T15:04:21.000Z")
 	if !s.Activity.Equal(want) {
 		t.Errorf("Activity = %v, want %v (hook.start must be ignored)", s.Activity, want)
 	}

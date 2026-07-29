@@ -76,6 +76,9 @@ fg = "4"
 [styles.branch]    # the git branch column
 fg = "5"
 
+[styles.model]     # the agent model column
+fg = "6"
+
 [styles.subject]   # the session title column (left unset = default text colour)
 
 [styles.worktree]  # marker shown next to worktree projects
@@ -96,7 +99,7 @@ branch = ""   # nf-pl-branch
 project = "full"
 
 [columns]
-# Width bounds for each column. The "content" columns (dir, branch, pane,
+# Width bounds for each column. The "content" columns (dir, branch, model, pane,
 # title) size to the longest value across visible sessions, clamped
 # between min and max. The "last" column uses the config directly -- last
 # messages are always long, so the bound is the column width.
@@ -105,6 +108,7 @@ project = "full"
 # column to a fixed width, restoring the old behaviour.
 dir    = { min = 8,  max = 28 }   # the project column
 branch = { min = 8,  max = 24 }   # the git branch column
+model  = { min = 0,  max = 24 }   # the agent model; min=0 lets it collapse
 pane   = { min = 0,  max = 12 }   # the tmux pane; min=0 lets it collapse
 title  = { min = 0,  max = 30 }   # the session title (cap in preview "column" mode)
 last   = { min = 0,  max = 100 }  # the last message (preview "column" mode only)
@@ -305,5 +309,6 @@ enter = "tmux select-pane -t {pane} && tmux select-window -t {pane} && tmux swit
 #   [styles.time]     fg = "#6c7086"                # overlay0
 #   [styles.project]  fg = "#89b4fa"                # blue
 #   [styles.branch]   fg = "#cba6f7"                # mauve
+#   [styles.model]    fg = "#89dceb"                # sky
 #   [styles.subject]  fg = "#cdd6f4"                # text
 #   [styles.preview]  fg = "#9399b2"                # overlay2

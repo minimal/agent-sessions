@@ -35,7 +35,7 @@ const doubleClickWithin = 400 * time.Millisecond
 const dimAfter = 24 * time.Hour
 
 // colCI is the fixed width of the CI column (gated by [circleci].token).
-// The dir, branch, pane, title and last columns are sized dynamically per
+// The dir, branch, model, pane, title and last columns are sized dynamically per
 // the [columns] config -- see widths and computeWidths.
 const colCI = 4
 
@@ -49,13 +49,14 @@ var colState = func() int {
 }()
 
 // widths holds the per-column visual widths computed for the current
-// session set. dir/branch/pane are used in every mode; titleCap caps the
+// session set. dir/branch/model/pane are used in every mode; titleCap caps the
 // subject in preview "column" mode. A value of 0 means the column is
 // hidden: the cell and its trailing gap are both skipped, and the subject
 // is hidden in column mode.
 type widths struct {
 	dir      int
 	branch   int
+	model    int
 	pane     int
 	titleCap int // cap for the subject in preview "column" mode
 }
@@ -72,6 +73,7 @@ type styles struct {
 	time     lipgloss.Style
 	project  lipgloss.Style
 	branch   lipgloss.Style
+	model    lipgloss.Style
 	subject  lipgloss.Style
 	worktree lipgloss.Style
 	state    map[SessionState]lipgloss.Style
@@ -89,6 +91,7 @@ func newStyles(cfg Config) styles {
 		time:     cfg.Styles.Time.style(),
 		project:  cfg.Styles.Project.style(),
 		branch:   cfg.Styles.Branch.style(),
+		model:    cfg.Styles.Model.style(),
 		subject:  cfg.Styles.Subject.style(),
 		worktree: cfg.Styles.Worktree.style(),
 		state: map[SessionState]lipgloss.Style{
@@ -545,6 +548,17 @@ func (m *model) observedBranchWidth() int {
 	return w
 }
 
+// observedModelWidth returns the widest known model across visible sessions.
+func (m *model) observedModelWidth() int {
+	var w int
+	for _, s := range m.sessions {
+		if wm := lipgloss.Width(s.Model); wm > w {
+			w = wm
+		}
+	}
+	return w
+}
+
 // observedPaneWidth returns the widest tmux pane name across the visible
 // sessions. An empty pane (session not in tmux) contributes 0.
 func (m *model) observedPaneWidth() int {
@@ -559,7 +573,7 @@ func (m *model) observedPaneWidth() int {
 
 // computeWidths fills m.widths for the current m.sessions. Call this after
 // any change to the visible session set (initial load, poll refresh, filter
-// change, window resize). It is O(visible sessions x 3 columns), so the
+// change, window resize). It is O(visible sessions x 4 columns), so the
 // per-refresh cost is negligible even with hundreds of sessions.
 func (m *model) computeWidths() {
 	cfg := m.colCfg
@@ -568,6 +582,7 @@ func (m *model) computeWidths() {
 	branchOH := iconOverhead(m.branchIcon) + iconOverhead(m.gitIcon)
 	m.widths.dir = colWidth(m.observedDirWidth(), iconOverhead(m.dirIcon), cfg.Dir)
 	m.widths.branch = colWidth(m.observedBranchWidth(), branchOH, cfg.Branch)
+	m.widths.model = colWidth(m.observedModelWidth(), 0, cfg.Model)
 	m.widths.pane = colWidth(m.observedPaneWidth(), 0, cfg.Pane)
 	// titleCap is the upper bound on the subject in preview "column" mode.
 	// The actual subject width also depends on what's left of the row
@@ -1568,6 +1583,11 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 		}
 		bodyW := m.widths.branch - branchOH - gitOH
 		emit(gitCell + seg(branchStyle, iconBody(m.branchIcon, s.Branch, bodyW)))
+	}
+
+	// model column.
+	if m.widths.model > 0 {
+		emit(seg(m.styles.model, truncPad(s.Model, m.widths.model)))
 	}
 
 	// pane column.

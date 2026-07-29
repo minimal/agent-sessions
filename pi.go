@@ -19,16 +19,21 @@ import (
 // and there is no inline aiTitle/gitBranch/slug — cwd comes from the session
 // line, branch from the repo, and the subject from the first user prompt (or a
 // session named with `pi --name`).
+type piMessage struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+	Model   string          `json:"model"`
+	ModelID string          `json:"modelId"`
+}
+
 type piLine struct {
-	Type      string `json:"type"`
-	Timestamp string `json:"timestamp"`
-	ID        string `json:"id"`
-	CWD       string `json:"cwd"`
-	Name      string `json:"name"`
-	Message   *struct {
-		Role    string          `json:"role"`
-		Content json.RawMessage `json:"content"`
-	} `json:"message"`
+	Type      string     `json:"type"`
+	Timestamp string     `json:"timestamp"`
+	ID        string     `json:"id"`
+	CWD       string     `json:"cwd"`
+	Name      string     `json:"name"`
+	ModelID   string     `json:"modelId"`
+	Message   *piMessage `json:"message"`
 }
 
 // piAdapter reads pi transcripts under ~/.pi/agent/sessions (overridable via
@@ -382,6 +387,16 @@ func absorbPi(s *Session, l piLine) {
 		}
 		if l.Name != "" {
 			s.Title = l.Name
+		}
+	}
+	if l.Type == "model_change" && l.ModelID != "" {
+		s.Model = l.ModelID
+	}
+	if l.Type == "message" && l.Message != nil && l.Message.Role == "assistant" {
+		if l.Message.ModelID != "" {
+			s.Model = l.Message.ModelID
+		} else if l.Message.Model != "" {
+			s.Model = l.Message.Model
 		}
 	}
 	if txt := piAssistantText(l); txt != "" {

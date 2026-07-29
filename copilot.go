@@ -328,6 +328,9 @@ func absorbCopilot(s *Session, l copilotLine, contextBranch *string) {
 			*contextBranch = l.Data.Context.Branch
 		}
 	}
+	if l.Type == "assistant.message" && l.Data != nil && l.Data.Model != "" {
+		s.Model = l.Data.Model
+	}
 	if txt := copilotAssistantText(l); txt != "" {
 		s.LastMsg = txt
 	}
