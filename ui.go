@@ -1512,9 +1512,9 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 		b.WriteString(statusSeg(st, wordMarker(s.State), w))
 	}
 	b.WriteString(seg(m.agentStyles[s.Source], m.agentCell(s)))
-	b.WriteString(seg(m.styles.time, s.When().Format("Jan 02 15:04")))
 	b.WriteString(seg(lipgloss.NewStyle(), m.tmuxCell(s)))
 	b.WriteString(gap(1))
+	b.WriteString(seg(m.styles.time, s.When().Format("01-02 15:04")))
 
 	// Dynamic-width columns. Each emit() prepends a 2-space gap, so a hidden
 	// column (width 0) skips both its cell and the gap that would separate
