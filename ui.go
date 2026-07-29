@@ -150,6 +150,7 @@ type model struct {
 	gitIcon        string                            // per-repo glyph before the branch column; "" hides it
 	repoColors     []lipgloss.TerminalColor          // palette cycled per repo for the git icon
 	dirNameOnly    bool                              // show just the directory name, not the full path
+	modelReplacer  *strings.Replacer                 // shortens displayed model names; nil leaves them unchanged
 	selColors      bool                              // keep colours on the cursor row
 	selStatusColor bool                              // keep status marker/word coloured in reverse mode
 	selStatusFg    map[marker]lipgloss.TerminalColor // per-status text-colour overrides for the reversed row
@@ -283,6 +284,7 @@ func newModel(cfg Config) model {
 		gitIcon:        cfg.Git.Icon,
 		repoColors:     repoPalette(cfg.Git.Colors),
 		dirNameOnly:    cfg.Display.Project == "name",
+		modelReplacer:  newModelReplacer(cfg.Display.ModelReplacements),
 		selColors:      cfg.Selection.Colors,
 		selStatusColor: cfg.Selection.StatusColor,
 		selStatusFg:    selStatusFg,
@@ -514,6 +516,35 @@ func colWidth(observed, iconOH int, cfg ColumnConfig) int {
 	return w
 }
 
+// newModelReplacer builds a deterministic, single-pass replacer. Longer
+// fragments win when keys overlap, and replacement text is not replaced again.
+func newModelReplacer(replacements map[string]string) *strings.Replacer {
+	keys := make([]string, 0, len(replacements))
+	for old := range replacements {
+		if old != "" {
+			keys = append(keys, old)
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if len(keys[i]) != len(keys[j]) {
+			return len(keys[i]) > len(keys[j])
+		}
+		return keys[i] < keys[j]
+	})
+	pairs := make([]string, 0, len(keys)*2)
+	for _, old := range keys {
+		pairs = append(pairs, old, replacements[old])
+	}
+	return strings.NewReplacer(pairs...)
+}
+
+func (m model) displayModel(s Session) string {
+	if m.modelReplacer == nil {
+		return s.Model
+	}
+	return m.modelReplacer.Replace(s.Model)
+}
+
 // observedDirWidth returns the widest directory value across the visible
 // sessions, respecting m.dirNameOnly. Empty paths contribute 0.
 func (m *model) observedDirWidth() int {
@@ -552,7 +583,7 @@ func (m *model) observedBranchWidth() int {
 func (m *model) observedModelWidth() int {
 	var w int
 	for _, s := range m.sessions {
-		if wm := lipgloss.Width(s.Model); wm > w {
+		if wm := lipgloss.Width(m.displayModel(s)); wm > w {
 			w = wm
 		}
 	}
@@ -1114,7 +1145,8 @@ func (m *model) applyFilter() {
 			if m.branch != "" && s.Branch != m.branch {
 				continue
 			}
-			if q != "" && !s.matches(q) {
+			displayModel := strings.ToLower(m.displayModel(s))
+			if q != "" && !s.matches(q) && !strings.Contains(displayModel, q) {
 				continue
 			}
 			m.sessions = append(m.sessions, s)
@@ -1587,7 +1619,7 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 
 	// model column.
 	if m.widths.model > 0 {
-		emit(seg(m.styles.model, truncPad(s.Model, m.widths.model)))
+		emit(seg(m.styles.model, truncPad(m.displayModel(s), m.widths.model)))
 	}
 
 	// pane column.

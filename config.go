@@ -51,7 +51,8 @@ type Config struct {
 		Dir    string `toml:"dir"`    // shown before the directory; "" hides it
 	} `toml:"icons"`
 	Display struct {
-		Project string `toml:"project"` // "full" path or just the "name"
+		Project           string            `toml:"project"`            // "full" path or just the "name"
+		ModelReplacements map[string]string `toml:"model_replacements"` // literal model-name fragment replacements
 	} `toml:"display"`
 	Selection struct {
 		Colors       bool     `toml:"colors"`      // keep column/status colours on the cursor row

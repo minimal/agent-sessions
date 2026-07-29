@@ -882,6 +882,49 @@ func TestModelColumnDisableAndCollapse(t *testing.T) {
 	}
 }
 
+func TestModelReplacements(t *testing.T) {
+	sessions := []Session{
+		{ID: "a", Title: "one", Model: "claude-opus-5", Modified: time.Now()},
+		{ID: "b", Title: "two", Model: "gpt-5.6-sol", Modified: time.Now()},
+	}
+	m := testModel(previewRow, sessions)
+	m.modelReplacer = newModelReplacer(map[string]string{
+		"claude-": "",
+		"gpt-":    "",
+	})
+	m.computeWidths()
+
+	out := m.View()
+	if !strings.Contains(out, "opus-5") || !strings.Contains(out, "5.6-sol") {
+		t.Errorf("shortened models should render, got:\n%s", out)
+	}
+	if strings.Contains(out, "claude-opus-5") || strings.Contains(out, "gpt-5.6-sol") {
+		t.Errorf("raw models should not render when replacements apply, got:\n%s", out)
+	}
+
+	m.all = sessions
+	m.query = "cl-opus"
+	m.modelReplacer = newModelReplacer(map[string]string{"claude-": "cl-"})
+	m.applyFilter()
+	if len(m.sessions) != 1 || m.sessions[0].ID != "a" {
+		t.Errorf("search should match displayed model name, got %+v", m.sessions)
+	}
+}
+
+func TestModelReplacementsPreferLongestAndDoNotCascade(t *testing.T) {
+	r := newModelReplacer(map[string]string{
+		"claude-opus-": "op-",
+		"claude-":      "cl-",
+		"cl-":          "",
+	})
+	if got := r.Replace("claude-opus-5"); got != "op-5" {
+		t.Errorf("overlapping replacement = %q, want op-5", got)
+	}
+	if got := r.Replace("claude-sonnet-5"); got != "cl-sonnet-5" {
+		t.Errorf("replacement should not cascade, got %q", got)
+	}
+}
+
 func TestSessionMatchesModel(t *testing.T) {
 	if !(Session{Model: "claude-opus-4.8"}).matches("opus") {
 		t.Error("search should match the session model")

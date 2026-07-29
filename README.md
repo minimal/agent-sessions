@@ -179,6 +179,16 @@ path or just its final segment. Search still matches the full path either way:
 project = "full"   # or "name" for just the directory name
 ```
 
+Model names can be shortened with literal fragment replacements. Replacements
+are display-only; search matches both the raw and shortened names. When entries
+overlap, the longest matching fragment wins:
+
+```toml
+[display.model_replacements]
+"claude-" = ""   # claude-opus-5 -> opus-5; use "cl-" for cl-opus-5
+"gpt-" = ""      # gpt-5.6-sol -> 5.6-sol
+```
+
 The `[columns]` section bounds the width of each column. The content columns
 (`dir`, `branch`, `model`, `pane`, `title`) size to the longest visible value, clamped
 to a per-column `min`/`max`. The `last` column is config-only — last messages
