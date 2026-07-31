@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -38,11 +40,10 @@ type copilotLine struct {
 // ~/.copilot/session-state (overridable via [sources.copilot] session_dir or
 // $COPILOT_HOME). Each session is a directory named by its uuid holding an
 // events.jsonl transcript and a workspace.yaml header. Copilot keeps no
-// live-process registry (unlike Claude's ~/.claude/sessions/<pid>.json), so —
-// like pi — authoritative live state comes from marker files written by the
-// bundled hook (extensions/copilot-live); without it Live falls back to a
-// cwd-based tmux pane match, and sessions surface as offline but still sort by
-// activity/mtime.
+// live-process registry (unlike Claude's ~/.claude/sessions/<pid>.json).
+// Authoritative state comes from marker files written by the bundled hook
+// (extensions/copilot-live); without it, Copilot's inuse.<pid>.lock files still
+// identify active sessions, while a cwd-based tmux match supplies the pane.
 type copilotAdapter struct {
 	dir   string // override; "" = env/default
 	cache *transcriptCache
@@ -58,6 +59,27 @@ func newCopilotAdapter(dir string) *copilotAdapter {
 }
 
 func (a *copilotAdapter) Name() string { return "copilot" }
+
+func (a *copilotAdapter) TrashPaths(s Session) ([]string, error) {
+	if s.Source != a.Name() {
+		return nil, fmt.Errorf("trash session %q: source is %q, want %q", s.ID, s.Source, a.Name())
+	}
+	if filepath.Base(s.File) != "events.jsonl" {
+		return nil, fmt.Errorf("trash Copilot session %q: transcript is not events.jsonl", s.ID)
+	}
+	root, err := filepath.Abs(a.root())
+	if err != nil {
+		return nil, fmt.Errorf("trash Copilot session %q: resolve session root: %w", s.ID, err)
+	}
+	sessionDir, err := filepath.Abs(filepath.Dir(s.File))
+	if err != nil {
+		return nil, fmt.Errorf("trash Copilot session %q: resolve session directory: %w", s.ID, err)
+	}
+	if filepath.Dir(sessionDir) != root || filepath.Base(sessionDir) != s.ID {
+		return nil, fmt.Errorf("trash Copilot session %q: session directory is outside the configured root", s.ID)
+	}
+	return []string{sessionDir}, nil
+}
 
 // root resolves the session-state directory: explicit config -> $COPILOT_HOME
 // -> default ~/.copilot/session-state.
@@ -160,13 +182,41 @@ func parseCopilotMarkerStatus(status string) SessionState {
 	}
 }
 
+// copilotInUsePID returns the first live PID named by an inuse.<pid>.lock file
+// in sessionDir. Copilot creates these locks itself, so they remain available
+// when the optional agent-sessions live hook is not installed.
+func copilotInUsePID(sessionDir string) int {
+	entries, err := os.ReadDir(sessionDir)
+	if err != nil {
+		return 0
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		pidText, ok := strings.CutPrefix(entry.Name(), "inuse.")
+		if !ok {
+			continue
+		}
+		pidText, ok = strings.CutSuffix(pidText, ".lock")
+		if !ok || pidText == "" {
+			continue
+		}
+		pid, err := strconv.Atoi(pidText)
+		if err == nil && pidAlive(pid) {
+			return pid
+		}
+	}
+	return 0
+}
+
 // Live attaches live state to copilot sessions when the copilot-live hook has
 // written marker files. A marker gives us PID, tmux pane, cwd, and status;
 // sessions with a live marker become Live() and show the corresponding state.
-// Sessions without a usable marker fall back to a cwd-based pane match, so the
-// TUI stays useful when the hook isn't installed. The Copilot session id is
-// always the plain session uuid (the session-state dir name), so no id-variant
-// matching is needed.
+// Sessions without a usable marker use Copilot's inuse.<pid>.lock file to
+// detect a live process, then fall back to a cwd-based pane match. The Copilot
+// session id is always the plain session uuid (the session-state dir name), so
+// no id-variant matching is needed.
 //
 // Stale markers are cleaned up: a marker whose PID is dead is removed
 // regardless of age (a resumed copilot would have overwritten it with the new
@@ -204,7 +254,13 @@ func (a *copilotAdapter) Live(sessions []Session) {
 					sessions[i].Pane = pane
 				}
 			}
-		} else if pane, ok := tmuxPaneForCWD(sessions[i].CWD, panes); ok {
+			continue
+		}
+		if pid := copilotInUsePID(filepath.Join(a.root(), sessions[i].ID)); pid != 0 {
+			sessions[i].PID = pid
+			sessions[i].State = StateUnknown
+		}
+		if pane, ok := tmuxPaneForCWD(sessions[i].CWD, panes); ok {
 			sessions[i].Pane = pane
 		}
 	}

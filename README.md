@@ -108,15 +108,18 @@ the `Adapter` interface plus a `[sources.<name>]` entry — see `ADAPTERS.md`.
 | `Esc` | clear the search and project/branch filters |
 | `g` / `G` | first / last session |
 | `ctrl+d` / `ctrl+u` | half page down / up |
-| `d` | delete the session after a y/n confirmation |
+| `d` | move the session to Trash after a y/n confirmation |
 | `r` | refresh |
 | `?` | help: list all keys and configured commands |
 | `q` | quit |
 
-`d` removes the session's transcript and sidecar directory from
-`~/.claude/projects`, which only means `claude --resume` can no longer
-offer that session — nothing a running Claude Code depends on. Sessions
-with a live claude process are refused.
+`d` moves the session and its source-owned sidecar data to the system Trash.
+Sessions up to `quick_trash_threshold_bytes` (8 KiB by default) use a y/n
+confirmation; larger sessions require typing `yes`. If no supported Trash
+command is installed, it moves the data to
+`$XDG_DATA_HOME/agent-sessions/trash` (or
+`~/.local/share/agent-sessions/trash`). Sessions with a running agent process
+are refused.
 
 `/` matches case-insensitively against each session's title, project path,
 branch, model, and session id. `f` opens the filter menu: the top bar lists the

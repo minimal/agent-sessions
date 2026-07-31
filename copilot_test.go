@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -233,6 +234,61 @@ func TestCopilotLiveMarkerDeadPID(t *testing.T) {
 	}
 	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
 		t.Errorf("dead-PID marker should be cleaned up; stat err = %v", err)
+	}
+}
+
+func TestCopilotLiveInUseLockWithoutMarker(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "session-state")
+	sid := "sid-without-hook"
+	sessionDir := filepath.Join(root, sid)
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(sessionDir, "inuse."+strconv.Itoa(os.Getpid())+".lock")
+	if err := os.WriteFile(lock, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions := []Session{{ID: sid, Source: "copilot", CWD: "/p"}}
+	newCopilotAdapter(root).Live(sessions)
+
+	if !sessions[0].Live() {
+		t.Fatal("session with a live inuse lock should be live without a hook marker")
+	}
+	if sessions[0].PID != os.Getpid() {
+		t.Errorf("PID = %d, want %d", sessions[0].PID, os.Getpid())
+	}
+	if sessions[0].State != StateUnknown {
+		t.Errorf("State = %q, want unknown without a hook status", sessions[0].State)
+	}
+
+	m := model{sessions: sessions}
+	updated, _ := m.Update(key("d"))
+	got := updated.(model)
+	if got.deleting != nil {
+		t.Error("delete confirmation should not open for an active Copilot session")
+	}
+	if got.notice != "Won't move a session with a running agent process to Trash." {
+		t.Errorf("notice = %q", got.notice)
+	}
+}
+
+func TestCopilotDeadInUseLockIsNotLive(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "session-state")
+	sid := "stale-lock"
+	sessionDir := filepath.Join(root, sid)
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "inuse.1073741824.lock"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions := []Session{{ID: sid, Source: "copilot", CWD: "/p"}}
+	newCopilotAdapter(root).Live(sessions)
+
+	if sessions[0].Live() {
+		t.Errorf("session with a dead-PID inuse lock should not be live (PID=%d)", sessions[0].PID)
 	}
 }
 

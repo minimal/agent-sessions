@@ -19,6 +19,10 @@
 # or output. Applies to every key-bound command.
 background = false
 
+# Sessions at or below this transcript size use the quick y/n Trash prompt.
+# Larger sessions require typing the full word "yes".
+quick_trash_threshold_bytes = 8192
+
 [styles.running]   # sessions whose turn is in progress
 fg = "10"
 bold = true

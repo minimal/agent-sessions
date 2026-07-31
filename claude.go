@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -52,6 +53,20 @@ func newClaudeAdapter() *claudeAdapter {
 }
 
 func (a *claudeAdapter) Name() string { return "claude" }
+
+func (a *claudeAdapter) TrashPaths(s Session) ([]string, error) {
+	if s.Source != a.Name() {
+		return nil, fmt.Errorf("trash session %q: source is %q, want %q", s.ID, s.Source, a.Name())
+	}
+	if !strings.HasSuffix(s.File, ".jsonl") {
+		return nil, fmt.Errorf("trash Claude session %q: transcript is not a .jsonl file", s.ID)
+	}
+	id := strings.TrimSuffix(filepath.Base(s.File), ".jsonl")
+	if id == "" || id != s.ID {
+		return nil, fmt.Errorf("trash Claude session %q: transcript filename does not match the session id", s.ID)
+	}
+	return []string{s.File, filepath.Join(filepath.Dir(s.File), id)}, nil
+}
 
 func (a *claudeAdapter) Sessions() ([]Session, error) {
 	sessions, err := a.cache.load()

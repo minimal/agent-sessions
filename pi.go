@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -61,6 +62,16 @@ func newPiAdapter(dir string) *piAdapter {
 }
 
 func (a *piAdapter) Name() string { return "pi" }
+
+func (a *piAdapter) TrashPaths(s Session) ([]string, error) {
+	if s.Source != a.Name() {
+		return nil, fmt.Errorf("trash session %q: source is %q, want %q", s.ID, s.Source, a.Name())
+	}
+	if !strings.HasSuffix(s.File, ".jsonl") {
+		return nil, fmt.Errorf("trash pi session %q: transcript is not a .jsonl file", s.ID)
+	}
+	return []string{s.File}, nil
+}
 
 // root resolves the session directory: explicit config -> env -> default.
 func (a *piAdapter) root() string {

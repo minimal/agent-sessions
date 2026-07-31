@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -84,13 +86,27 @@ func displayPath(path string) string {
 	return path
 }
 
-// Delete removes the session's transcript and its sidecar directory
-// (subagent transcripts, tool results).
-func (s Session) Delete() error {
-	if err := os.Remove(s.File); err != nil {
-		return err
+func displaySize(size int64) string {
+	if size < 1024 {
+		return fmt.Sprintf("%d B", size)
 	}
-	return os.RemoveAll(strings.TrimSuffix(s.File, ".jsonl"))
+	units := []string{"KiB", "MiB", "GiB", "TiB", "PiB", "EiB"}
+	value := float64(size)
+	for _, unit := range units {
+		value /= 1024
+		if value < 1024 || unit == units[len(units)-1] {
+			precision := 1
+			if value < 10 {
+				precision = 3
+			} else if value < 100 {
+				precision = 2
+			}
+			number := strconv.FormatFloat(value, 'f', precision, 64)
+			number = strings.TrimRight(strings.TrimRight(number, "0"), ".")
+			return number + " " + unit
+		}
+	}
+	return fmt.Sprintf("%d B", size)
 }
 
 // Dir is the working directory's final path segment, e.g. "agent-sessions"
