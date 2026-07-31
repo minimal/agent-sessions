@@ -268,7 +268,7 @@ func TestCopilotLiveInUseLockWithoutMarker(t *testing.T) {
 	if got.deleting != nil {
 		t.Error("delete confirmation should not open for an active Copilot session")
 	}
-	if got.notice != "Won't delete a session with a running agent process." {
+	if got.notice != "Won't move a session with a running agent process to Trash." {
 		t.Errorf("notice = %q", got.notice)
 	}
 }

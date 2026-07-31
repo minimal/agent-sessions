@@ -160,6 +160,7 @@ type model struct {
 	previewRecent  int                               // max recent sessions to always preview (row mode)
 	previewWithin  time.Duration
 	commands       map[string]string // key name -> command template
+	quickTrashMax  int64             // transcript bytes allowed to use the y/n Trash prompt
 	ciToken        string            // "" disables the CI column
 	ciSlugs        map[string]string // cwd -> CircleCI project slug ("" = none)
 	colCfg         ColumnBounds      // per-column width bounds from [columns]
@@ -179,8 +180,8 @@ type model struct {
 	spin           int                     // running-spinner frame index
 	spinning       bool                    // a spinner tick is scheduled
 	showHelp       bool
-	helpOffset     int      // scroll position within the help screen
-	deleting       *Session // awaiting y/n confirmation to delete
+	helpOffset     int // scroll position within the help screen
+	deleting       *trashConfirmation
 	picker         pickerState
 	menu           menuState
 	prompt         promptState
@@ -292,6 +293,7 @@ func newModel(cfg Config) model {
 		previewMode:    mode,
 		previewRecent:  cfg.Preview.Recent,
 		previewWithin:  cfg.PreviewWithin(),
+		quickTrashMax:  cfg.QuickTrashThresholdBytes,
 		ciToken:        cfg.ciToken(),
 		ciSlugs:        cfg.ciOverrides(),
 		colCfg:         cfg.Columns,
@@ -463,6 +465,11 @@ type promptState struct {
 	token  string            // the exact {text-input...} placeholder being filled
 	tmpl   string            // the command awaiting the text
 	vars   map[string]string // expansion vars captured at keypress
+}
+
+type trashConfirmation struct {
+	session Session
+	typed   bool
 }
 
 // glyphWidth is the display width to reserve for the status glyph: the widest
@@ -737,20 +744,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.notice = ""
 		m.cursorHidden = false // any key brings the cursor back
 		if m.deleting != nil {
-			s := *m.deleting
-			m.deleting = nil
-			if msg.String() == "y" {
-				if err := m.loader.Trash(s); err != nil {
-					m.notice = "trash: " + err.Error()
-					return m, nil
-				}
-				m.notice = fmt.Sprintf("Moved %q to Trash.", s.Subject())
-				if !m.loading {
-					m.loading = true
-					return m, m.loadCmd
-				}
-			}
-			return m, nil
+			return m.handleTrashKey(msg)
 		}
 		if m.showHelp {
 			switch msg.String() {
@@ -792,10 +786,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			s := m.sessions[m.cursor]
 			if s.Live() {
-				m.notice = "Won't delete a session with a running agent process."
+				m.notice = "Won't move a session with a running agent process to Trash."
 				break
 			}
-			m.deleting = &s
+			m.deleting = &trashConfirmation{
+				session: s,
+				typed:   s.Size > m.quickTrashMax,
+			}
+			if m.deleting.typed {
+				m.input = newLineInput()
+			}
 		case "/":
 			m.searching = true
 			m.query = ""
@@ -1065,6 +1065,48 @@ func (m model) handlePromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
+}
+
+func (m model) handleTrashKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	confirmation := *m.deleting
+	if !confirmation.typed {
+		m.deleting = nil
+		if msg.String() != "y" {
+			return m, nil
+		}
+		return m.trashSession(confirmation.session)
+	}
+
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.deleting = nil
+		return m, nil
+	case "enter":
+		m.deleting = nil
+		if m.input.Value() != "yes" {
+			m.notice = `Trash cancelled: confirmation must be exactly "yes".`
+			return m, nil
+		}
+		return m.trashSession(confirmation.session)
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return m, cmd
+}
+
+func (m model) trashSession(s Session) (tea.Model, tea.Cmd) {
+	if err := m.loader.Trash(s); err != nil {
+		m.notice = "trash: " + err.Error()
+		return m, nil
+	}
+	m.notice = fmt.Sprintf("Moved %q to Trash.", s.Subject())
+	if !m.loading {
+		m.loading = true
+		return m, m.loadCmd
+	}
+	return m, nil
 }
 
 // detectUnread flags sessions that just finished a turn (running -> idle) so
@@ -1375,7 +1417,16 @@ func (m model) View() string {
 		status = m.prompt.label + ": " + m.inputView(m.prompt.label+": ")
 	}
 	if m.deleting != nil {
-		status = fmt.Sprintf("Move %q to Trash? (y/n)", m.deleting.Subject())
+		s := m.deleting.session
+		if m.deleting.typed {
+			label := fmt.Sprintf(
+				"%q is %s, over the %s quick limit. Type yes to move to Trash: ",
+				s.Subject(), displaySize(s.Size), displaySize(m.quickTrashMax),
+			)
+			status = label + m.inputView(label)
+		} else {
+			status = fmt.Sprintf("Move %q [%s] to Trash? (y/n)", s.Subject(), displaySize(s.Size))
+		}
 	}
 	b.WriteString(m.styles.bar.Render(pad(status, m.width)))
 	return b.String()
@@ -1421,7 +1472,7 @@ func (m model) helpView() string {
 		"    /                  search; Enter keeps the filter, Esc clears it",
 		"    f                  filter menu: p by project, b by branch (pickers)",
 		"    o                  toggle showing only sessions with a running claude process",
-		"    d                  move session to Trash (asks y/n)",
+		"    d                  move session to Trash (large sessions: type yes)",
 		mouseHelp,
 		"    r                  refresh now",
 		"    ?                  this help",

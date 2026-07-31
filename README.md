@@ -114,7 +114,9 @@ the `Adapter` interface plus a `[sources.<name>]` entry — see `ADAPTERS.md`.
 | `q` | quit |
 
 `d` moves the session and its source-owned sidecar data to the system Trash.
-If no supported Trash command is installed, it moves the data to
+Sessions up to `quick_trash_threshold_bytes` (8 KiB by default) use a y/n
+confirmation; larger sessions require typing `yes`. If no supported Trash
+command is installed, it moves the data to
 `$XDG_DATA_HOME/agent-sessions/trash` (or
 `~/.local/share/agent-sessions/trash`). Sessions with a running agent process
 are refused.

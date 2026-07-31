@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"github.com/BurntSushi/toml"
 )
 
 func fallbackTrasher(dir string) trasher {
@@ -157,7 +159,7 @@ func TestCopilotTrashMovesWholeSessionDirectory(t *testing.T) {
 	trashRoot := filepath.Join(t.TempDir(), "trash")
 	loader := newMultiLoader([]Adapter{adapter}, nil)
 	loader.trasher = fallbackTrasher(trashRoot)
-	m := model{loader: loader, deleting: &session}
+	m := model{loader: loader, deleting: &trashConfirmation{session: session}}
 	updated, _ := m.Update(key("y"))
 	got := updated.(model)
 	if got.notice != `Moved "Trashed session" to Trash.` {
@@ -186,5 +188,101 @@ func TestCopilotTrashRejectsDirectoryOutsideRoot(t *testing.T) {
 	}
 	if _, err := newCopilotAdapter(root).TrashPaths(session); err == nil {
 		t.Fatal("Copilot TrashPaths accepted a session directory outside its configured root")
+	}
+}
+
+func trashConfirmationModel(t *testing.T, size, threshold int64) (model, string) {
+	t.Helper()
+	source := t.TempDir()
+	file := filepath.Join(source, "session-id.jsonl")
+	if err := os.WriteFile(file, []byte("transcript"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	session := Session{
+		ID:     "session-id",
+		File:   file,
+		Title:  "Session",
+		Size:   size,
+		Source: "claude",
+	}
+	loader := newMultiLoader([]Adapter{newClaudeAdapter()}, nil)
+	loader.trasher = fallbackTrasher(filepath.Join(t.TempDir(), "trash"))
+	return model{
+		loader:        loader,
+		sessions:      []Session{session},
+		quickTrashMax: threshold,
+	}, file
+}
+
+func TestQuickTrashUsesYNConfirmation(t *testing.T) {
+	m, file := trashConfirmationModel(t, 8192, 8192)
+
+	updated, _ := m.Update(key("d"))
+	got := updated.(model)
+	if got.deleting == nil || got.deleting.typed {
+		t.Fatal("session at the threshold should use the quick y/n confirmation")
+	}
+	updated, _ = got.Update(key("y"))
+	got = updated.(model)
+	if got.notice != `Moved "Session" to Trash.` {
+		t.Errorf("notice = %q", got.notice)
+	}
+	if _, err := os.Stat(file); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("quick-confirmed session still exists: %v", err)
+	}
+}
+
+func TestLargeTrashRequiresTypedYes(t *testing.T) {
+	m, file := trashConfirmationModel(t, 8193, 8192)
+
+	updated, _ := m.Update(key("d"))
+	got := updated.(model)
+	if got.deleting == nil || !got.deleting.typed {
+		t.Fatal("session over the threshold should require typed confirmation")
+	}
+	updated, _ = got.Update(key("y"))
+	got = updated.(model)
+	if got.deleting == nil {
+		t.Fatal("a single y should only edit the typed confirmation")
+	}
+	updated, _ = got.Update(key("enter"))
+	got = updated.(model)
+	if got.notice != `Trash cancelled: confirmation must be exactly "yes".` {
+		t.Errorf("notice = %q", got.notice)
+	}
+	if _, err := os.Stat(file); err != nil {
+		t.Fatalf("session was trashed after confirming only y: %v", err)
+	}
+
+	updated, _ = got.Update(key("d"))
+	got = updated.(model)
+	updated, _ = got.Update(key("yes"))
+	got = updated.(model)
+	updated, _ = got.Update(key("enter"))
+	got = updated.(model)
+	if got.notice != `Moved "Session" to Trash.` {
+		t.Errorf("notice = %q", got.notice)
+	}
+	if _, err := os.Stat(file); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("session still exists after typing yes: %v", err)
+	}
+}
+
+func TestQuickTrashThresholdDefault(t *testing.T) {
+	var cfg Config
+	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.QuickTrashThresholdBytes != 8192 {
+		t.Errorf("QuickTrashThresholdBytes = %d, want 8192", cfg.QuickTrashThresholdBytes)
+	}
+}
+
+func TestDisplaySizeMakesThresholdDifferenceVisible(t *testing.T) {
+	if got := displaySize(8192); got != "8 KiB" {
+		t.Errorf("displaySize(8192) = %q", got)
+	}
+	if got := displaySize(8193); got != "8.001 KiB" {
+		t.Errorf("displaySize(8193) = %q", got)
 	}
 }
