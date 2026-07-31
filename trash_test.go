@@ -6,9 +6,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/BurntSushi/toml"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func fallbackTrasher(dir string) trasher {
@@ -265,6 +267,38 @@ func TestLargeTrashRequiresTypedYes(t *testing.T) {
 	}
 	if _, err := os.Stat(file); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("session still exists after typing yes: %v", err)
+	}
+}
+
+func TestTrashPromptsCapLongSubject(t *testing.T) {
+	const width = 180
+	longSubject := strings.Repeat("s", 200)
+	for _, tc := range []struct {
+		name string
+		size int64
+	}{
+		{name: "quick", size: 8192},
+		{name: "typed", size: 8193},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := trashConfirmationModel(t, tc.size, 8192)
+			m.sessions[0].Title = longSubject
+			m.width = width
+			m.height = 3
+
+			updated, _ := m.Update(key("d"))
+			out := updated.(model).View()
+			status := out[strings.LastIndex(out, "\n")+1:]
+			if strings.Contains(status, longSubject) {
+				t.Errorf("Trash prompt contains the uncapped subject: %q", status)
+			}
+			if !strings.Contains(status, "…") {
+				t.Errorf("Trash prompt does not show a truncated subject: %q", status)
+			}
+			if got := lipgloss.Width(status); got > width {
+				t.Errorf("Trash prompt width = %d, want at most %d", got, width)
+			}
+		})
 	}
 }
 
