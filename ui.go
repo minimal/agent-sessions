@@ -792,7 +792,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			s := m.sessions[m.cursor]
 			if s.Live() {
-				m.notice = "Won't delete a session with a running claude process."
+				m.notice = "Won't delete a session with a running agent process."
 				break
 			}
 			m.deleting = &s
