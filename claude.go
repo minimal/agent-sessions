@@ -23,18 +23,21 @@ func claudeDir(elem ...string) (string, error) {
 
 // transcriptLine covers the JSONL fields we care about across Claude Code
 // transcript entry types.
+type transcriptMessage struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+	Model   string          `json:"model"`
+}
+
 type transcriptLine struct {
-	Type      string `json:"type"`
-	Timestamp string `json:"timestamp"`
-	AITitle   string `json:"aiTitle"`
-	CWD       string `json:"cwd"`
-	GitBranch string `json:"gitBranch"`
-	Slug      string `json:"slug"`
-	IsMeta    bool   `json:"isMeta"`
-	Message   *struct {
-		Role    string          `json:"role"`
-		Content json.RawMessage `json:"content"`
-	} `json:"message"`
+	Type      string             `json:"type"`
+	Timestamp string             `json:"timestamp"`
+	AITitle   string             `json:"aiTitle"`
+	CWD       string             `json:"cwd"`
+	GitBranch string             `json:"gitBranch"`
+	Slug      string             `json:"slug"`
+	IsMeta    bool               `json:"isMeta"`
+	Message   *transcriptMessage `json:"message"`
 }
 
 // claudeAdapter reads Claude Code transcripts under ~/.claude/projects and the
@@ -180,6 +183,9 @@ func absorb(s *Session, l transcriptLine) {
 	}
 	if l.Slug != "" {
 		s.Slug = l.Slug
+	}
+	if l.Type == "assistant" && l.Message != nil && l.Message.Role == "assistant" && l.Message.Model != "" {
+		s.Model = l.Message.Model
 	}
 	if txt := assistantText(l); txt != "" {
 		s.LastMsg = txt

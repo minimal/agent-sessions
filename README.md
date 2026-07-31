@@ -13,7 +13,7 @@ go build -o agent-sessions .
 Every session transcript from each enabled source (Claude Code's
 `~/.claude/projects/`, pi's `~/.pi/agent/sessions/`, ...), most recently active
 first, one line per session: index, state, last-modified time, project
-directory, git branch, the tmux pane hosting the session (as
+directory, git branch, model, the tmux pane hosting the session (as
 `session:window.pane`, for live sessions found in one), and a subject line
 (Claude's AI-generated title, or for pi the first prompt / a `pi --name`
 session). The list auto-refreshes every 2 seconds. The branch is whatever
@@ -119,7 +119,7 @@ offer that session — nothing a running Claude Code depends on. Sessions
 with a live claude process are refused.
 
 `/` matches case-insensitively against each session's title, project path,
-branch, and session id. `f` opens the filter menu: the top bar lists the
+branch, model, and session id. `f` opens the filter menu: the top bar lists the
 follow-up keys, `p` filters the list to a single project and `b` to a
 single branch, each chosen via the picker (when a project filter is active,
 the branch picker offers only that project's branches). `Esc` — or any
@@ -148,7 +148,7 @@ defaults.
 Each UI element is a `[styles.*]` section accepting `fg`/`bg` (ANSI/256
 number or `#rrggbb` hex) and `bold`/`faint`/`reverse` booleans. Status
 elements: `running`, `waiting`, `idle`, `unread`, `offline`, `dimmed`. Chrome:
-`bar`, `selected`, `preview`. Columns: `index`, `time`, `project`, `branch`,
+`bar`, `selected`, `preview`. Columns: `index`, `time`, `project`, `branch`, `model`,
 `subject`.
 
 ```toml
@@ -179,8 +179,18 @@ path or just its final segment. Search still matches the full path either way:
 project = "full"   # or "name" for just the directory name
 ```
 
+Model names can be shortened with literal fragment replacements. Replacements
+are display-only; search matches both the raw and shortened names. When entries
+overlap, the longest matching fragment wins:
+
+```toml
+[display.model_replacements]
+"claude-" = ""   # claude-opus-5 -> opus-5; use "cl-" for cl-opus-5
+"gpt-" = ""      # gpt-5.6-sol -> 5.6-sol
+```
+
 The `[columns]` section bounds the width of each column. The content columns
-(`dir`, `branch`, `pane`, `title`) size to the longest visible value, clamped
+(`dir`, `branch`, `model`, `pane`, `title`) size to the longest visible value, clamped
 to a per-column `min`/`max`. The `last` column is config-only — last messages
 are always long, so the bounds are the actual column width. Set `max = 0` to
 hide a column, and `min = max` to pin it to a fixed width (restoring the
@@ -190,6 +200,7 @@ pre-feature behaviour):
 [columns]
 dir    = { min = 8,  max = 28 }   # the project column
 branch = { min = 8,  max = 24 }   # the git branch column
+model  = { min = 0,  max = 24 }   # the agent model; min = 0 lets it collapse
 pane   = { min = 0,  max = 12 }   # the tmux pane; min = 0 lets it collapse
 title  = { min = 0,  max = 30 }   # the session title (cap in preview "column" mode)
 last   = { min = 0,  max = 100 }  # the last message (preview "column" mode only)

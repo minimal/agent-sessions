@@ -35,7 +35,7 @@ const doubleClickWithin = 400 * time.Millisecond
 const dimAfter = 24 * time.Hour
 
 // colCI is the fixed width of the CI column (gated by [circleci].token).
-// The dir, branch, pane, title and last columns are sized dynamically per
+// The dir, branch, model, pane, title and last columns are sized dynamically per
 // the [columns] config -- see widths and computeWidths.
 const colCI = 4
 
@@ -49,13 +49,14 @@ var colState = func() int {
 }()
 
 // widths holds the per-column visual widths computed for the current
-// session set. dir/branch/pane are used in every mode; titleCap caps the
+// session set. dir/branch/model/pane are used in every mode; titleCap caps the
 // subject in preview "column" mode. A value of 0 means the column is
 // hidden: the cell and its trailing gap are both skipped, and the subject
 // is hidden in column mode.
 type widths struct {
 	dir      int
 	branch   int
+	model    int
 	pane     int
 	titleCap int // cap for the subject in preview "column" mode
 }
@@ -72,6 +73,7 @@ type styles struct {
 	time     lipgloss.Style
 	project  lipgloss.Style
 	branch   lipgloss.Style
+	model    lipgloss.Style
 	subject  lipgloss.Style
 	worktree lipgloss.Style
 	state    map[SessionState]lipgloss.Style
@@ -89,6 +91,7 @@ func newStyles(cfg Config) styles {
 		time:     cfg.Styles.Time.style(),
 		project:  cfg.Styles.Project.style(),
 		branch:   cfg.Styles.Branch.style(),
+		model:    cfg.Styles.Model.style(),
 		subject:  cfg.Styles.Subject.style(),
 		worktree: cfg.Styles.Worktree.style(),
 		state: map[SessionState]lipgloss.Style{
@@ -135,7 +138,10 @@ type model struct {
 	bgExec         bool              // run key-bound commands detached (no terminal takeover)
 	enterBySource  map[string]string // per-source override of the "enter" command (key = Source)
 	tmuxGlyph      string            // marker for tmux-attachable sessions; "" hides it
-	worktreeGlyph  string            // marker for worktree projects; "" hides the slot entirely
+	agentGlyphs    map[string]string // marker keyed by Session.Source
+	agentStyles    map[string]lipgloss.Style
+	colAgentGlyph  int    // display width reserved for the widest source glyph
+	worktreeGlyph  string // marker for worktree projects; "" hides the slot entirely
 	glyphs         map[marker]string
 	colGlyph       int                               // display width reserved for the status glyph
 	showWords      bool                              // show the state word next to the glyph
@@ -144,6 +150,7 @@ type model struct {
 	gitIcon        string                            // per-repo glyph before the branch column; "" hides it
 	repoColors     []lipgloss.TerminalColor          // palette cycled per repo for the git icon
 	dirNameOnly    bool                              // show just the directory name, not the full path
+	modelReplacer  *strings.Replacer                 // shortens displayed model names; nil leaves them unchanged
 	selColors      bool                              // keep colours on the cursor row
 	selStatusColor bool                              // keep status marker/word coloured in reverse mode
 	selStatusFg    map[marker]lipgloss.TerminalColor // per-status text-colour overrides for the reversed row
@@ -242,6 +249,21 @@ func newModel(cfg Config) model {
 	if cfg.Sources.Copilot.Enter != "" {
 		enterBySource["copilot"] = cfg.Sources.Copilot.Enter
 	}
+	agentGlyphs := map[string]string{
+		"claude":  cfg.Sources.Claude.Glyph,
+		"pi":      cfg.Sources.Pi.Glyph,
+		"copilot": cfg.Sources.Copilot.Glyph,
+	}
+	agentStyles := map[string]lipgloss.Style{}
+	for source, color := range map[string]string{
+		"claude":  cfg.Sources.Claude.Color,
+		"pi":      cfg.Sources.Pi.Color,
+		"copilot": cfg.Sources.Copilot.Color,
+	} {
+		if color != "" {
+			agentStyles[source] = lipgloss.NewStyle().Foreground(lipgloss.Color(color))
+		}
+	}
 	m := model{
 		loader:         newMultiLoader(adapters, cfg.SortDims()),
 		styles:         newStyles(cfg),
@@ -250,6 +272,9 @@ func newModel(cfg Config) model {
 		bgExec:         cfg.Background,
 		enterBySource:  enterBySource,
 		tmuxGlyph:      cfg.Tmux.Glyph,
+		agentGlyphs:    agentGlyphs,
+		agentStyles:    agentStyles,
+		colAgentGlyph:  agentGlyphWidth(agentGlyphs),
 		worktreeGlyph:  cfg.Worktree.Glyph,
 		glyphs:         glyphs,
 		colGlyph:       glyphWidth(glyphs),
@@ -259,6 +284,7 @@ func newModel(cfg Config) model {
 		gitIcon:        cfg.Git.Icon,
 		repoColors:     repoPalette(cfg.Git.Colors),
 		dirNameOnly:    cfg.Display.Project == "name",
+		modelReplacer:  newModelReplacer(cfg.Display.ModelReplacements),
 		selColors:      cfg.Selection.Colors,
 		selStatusColor: cfg.Selection.StatusColor,
 		selStatusFg:    selStatusFg,
@@ -452,6 +478,14 @@ func glyphWidth(glyphs map[marker]string) int {
 	return w
 }
 
+func agentGlyphWidth(glyphs map[string]string) int {
+	w := 0
+	for _, glyph := range glyphs {
+		w = max(w, lipgloss.Width(glyph))
+	}
+	return w
+}
+
 // iconOverhead returns the display width an icon prefix takes inside its
 // column: the icon itself plus the one-space separator, or 0 if the icon is
 // disabled. The column's configured min/max bounds are visual (total) widths,
@@ -480,6 +514,35 @@ func colWidth(observed, iconOH int, cfg ColumnConfig) int {
 		w = cfg.Max
 	}
 	return w
+}
+
+// newModelReplacer builds a deterministic, single-pass replacer. Longer
+// fragments win when keys overlap, and replacement text is not replaced again.
+func newModelReplacer(replacements map[string]string) *strings.Replacer {
+	keys := make([]string, 0, len(replacements))
+	for old := range replacements {
+		if old != "" {
+			keys = append(keys, old)
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if len(keys[i]) != len(keys[j]) {
+			return len(keys[i]) > len(keys[j])
+		}
+		return keys[i] < keys[j]
+	})
+	pairs := make([]string, 0, len(keys)*2)
+	for _, old := range keys {
+		pairs = append(pairs, old, replacements[old])
+	}
+	return strings.NewReplacer(pairs...)
+}
+
+func (m model) displayModel(s Session) string {
+	if m.modelReplacer == nil {
+		return s.Model
+	}
+	return m.modelReplacer.Replace(s.Model)
 }
 
 // observedDirWidth returns the widest directory value across the visible
@@ -516,6 +579,17 @@ func (m *model) observedBranchWidth() int {
 	return w
 }
 
+// observedModelWidth returns the widest known model across visible sessions.
+func (m *model) observedModelWidth() int {
+	var w int
+	for _, s := range m.sessions {
+		if wm := lipgloss.Width(m.displayModel(s)); wm > w {
+			w = wm
+		}
+	}
+	return w
+}
+
 // observedPaneWidth returns the widest tmux pane name across the visible
 // sessions. An empty pane (session not in tmux) contributes 0.
 func (m *model) observedPaneWidth() int {
@@ -530,7 +604,7 @@ func (m *model) observedPaneWidth() int {
 
 // computeWidths fills m.widths for the current m.sessions. Call this after
 // any change to the visible session set (initial load, poll refresh, filter
-// change, window resize). It is O(visible sessions x 3 columns), so the
+// change, window resize). It is O(visible sessions x 4 columns), so the
 // per-refresh cost is negligible even with hundreds of sessions.
 func (m *model) computeWidths() {
 	cfg := m.colCfg
@@ -539,6 +613,7 @@ func (m *model) computeWidths() {
 	branchOH := iconOverhead(m.branchIcon) + iconOverhead(m.gitIcon)
 	m.widths.dir = colWidth(m.observedDirWidth(), iconOverhead(m.dirIcon), cfg.Dir)
 	m.widths.branch = colWidth(m.observedBranchWidth(), branchOH, cfg.Branch)
+	m.widths.model = colWidth(m.observedModelWidth(), 0, cfg.Model)
 	m.widths.pane = colWidth(m.observedPaneWidth(), 0, cfg.Pane)
 	// titleCap is the upper bound on the subject in preview "column" mode.
 	// The actual subject width also depends on what's left of the row
@@ -1070,7 +1145,8 @@ func (m *model) applyFilter() {
 			if m.branch != "" && s.Branch != m.branch {
 				continue
 			}
-			if q != "" && !s.matches(q) {
+			displayModel := strings.ToLower(m.displayModel(s))
+			if q != "" && !s.matches(q) && !strings.Contains(displayModel, q) {
 				continue
 			}
 			m.sessions = append(m.sessions, s)
@@ -1468,9 +1544,9 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 
 	mk := m.markerFor(s)
 	var b strings.Builder
-	// Prefix: index, status group (status + state word + tmux marker), and
-	// time. All fixed-width; the time cell has no trailing gap -- the first
-	// emit() call below adds it.
+	// Prefix: index, status group (status + state word + tmux and source
+	// markers), and time. All fixed-width; the time cell has no trailing gap
+	// -- the first emit() call below adds it.
 	b.WriteString(seg(m.styles.index, fmt.Sprintf("%4d", idx+1)))
 	b.WriteString(gap(1))
 	b.WriteString(statusSeg(m.styleFor(mk), mk, m.statusCell(mk)))
@@ -1482,9 +1558,10 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 		}
 		b.WriteString(statusSeg(st, wordMarker(s.State), w))
 	}
+	b.WriteString(seg(m.agentStyles[s.Source], m.agentCell(s)))
 	b.WriteString(seg(lipgloss.NewStyle(), m.tmuxCell(s)))
-	b.WriteString(gap(2))
-	b.WriteString(seg(m.styles.time, s.When().Format("Jan 02 15:04")))
+	b.WriteString(gap(1))
+	b.WriteString(seg(m.styles.time, s.When().Format("01-02 15:04")))
 
 	// Dynamic-width columns. Each emit() prepends a 2-space gap, so a hidden
 	// column (width 0) skips both its cell and the gap that would separate
@@ -1538,6 +1615,11 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 		}
 		bodyW := m.widths.branch - branchOH - gitOH
 		emit(gitCell + seg(branchStyle, iconBody(m.branchIcon, s.Branch, bodyW)))
+	}
+
+	// model column.
+	if m.widths.model > 0 {
+		emit(seg(m.styles.model, truncPad(m.displayModel(s), m.widths.model)))
 	}
 
 	// pane column.
@@ -1764,6 +1846,16 @@ func (m model) tmuxCell(s Session) string {
 		return "  " + m.tmuxGlyph
 	}
 	return "  " + strings.Repeat(" ", lipgloss.Width(m.tmuxGlyph))
+}
+
+// agentCell is the fixed-width source marker slot. It reserves the widest
+// configured glyph so sources stay aligned even when their glyphs differ in
+// display width. If every glyph is disabled, the slot disappears entirely.
+func (m model) agentCell(s Session) string {
+	if m.colAgentGlyph == 0 {
+		return ""
+	}
+	return "  " + pad(m.agentGlyphs[s.Source], m.colAgentGlyph)
 }
 
 // worktreeCell is the fixed-width worktree marker slot, between the project

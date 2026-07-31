@@ -31,6 +31,7 @@ type Session struct {
 	File     string
 	CWD      string
 	Branch   string
+	Model    string
 	Repo     string // git common dir shared by a repo's worktrees; "" if none
 	Slug     string
 	Title    string
@@ -106,7 +107,7 @@ func (s Session) Dir() string {
 // session's searchable fields (including Source, so "/pi" or "/claude"
 // filters by adapter, and Pane, so a pane id narrows to sessions in it).
 func (s Session) matches(q string) bool {
-	for _, f := range []string{s.Subject(), s.Project(), s.Branch, s.ID, s.CWD, s.Pane, s.Source} {
+	for _, f := range []string{s.Subject(), s.Project(), s.Branch, s.Model, s.ID, s.CWD, s.Pane, s.Source} {
 		if strings.Contains(strings.ToLower(f), q) {
 			return true
 		}

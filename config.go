@@ -33,11 +33,12 @@ type Config struct {
 		Bar      StyleConfig `toml:"bar"`
 		Selected StyleConfig `toml:"selected"`
 		Preview  StyleConfig `toml:"preview"`
-		Index    StyleConfig `toml:"index"`   // the leading row number
-		Time     StyleConfig `toml:"time"`    // the last-activity timestamp
-		Project  StyleConfig `toml:"project"` // the directory column
-		Branch   StyleConfig `toml:"branch"`  // the git branch column
-		Subject  StyleConfig `toml:"subject"` // the session title column
+		Index    StyleConfig `toml:"index"`    // the leading row number
+		Time     StyleConfig `toml:"time"`     // the last-activity timestamp
+		Project  StyleConfig `toml:"project"`  // the directory column
+		Branch   StyleConfig `toml:"branch"`   // the git branch column
+		Model    StyleConfig `toml:"model"`    // the model column
+		Subject  StyleConfig `toml:"subject"`  // the session title column
 		Worktree StyleConfig `toml:"worktree"` // marker shown next to worktree projects
 	} `toml:"styles"`
 	Commands map[string]string `toml:"commands"`
@@ -50,7 +51,8 @@ type Config struct {
 		Dir    string `toml:"dir"`    // shown before the directory; "" hides it
 	} `toml:"icons"`
 	Display struct {
-		Project string `toml:"project"` // "full" path or just the "name"
+		Project           string            `toml:"project"`            // "full" path or just the "name"
+		ModelReplacements map[string]string `toml:"model_replacements"` // literal model-name fragment replacements
 	} `toml:"display"`
 	Selection struct {
 		Colors       bool     `toml:"colors"`      // keep column/status colours on the cursor row
@@ -75,7 +77,7 @@ type Config struct {
 		Recent int    `toml:"recent"` // max recent sessions to always preview
 		Within string `toml:"within"` // recency window, a Go duration string
 	} `toml:"preview"`
-	Columns ColumnBounds `toml:"columns"`
+	Columns  ColumnBounds `toml:"columns"`
 	Worktree struct {
 		Glyph string `toml:"glyph"` // marker on worktree projects; "" hides it
 	} `toml:"worktree"`
@@ -105,22 +107,28 @@ type Config struct {
 		Claude struct {
 			Enabled bool   `toml:"enabled"`
 			Enter   string `toml:"enter"` // overrides the "enter" command for claude sessions
+			Glyph   string `toml:"glyph"` // identifies claude sessions; "" hides it
+			Color   string `toml:"color"` // glyph colour; "" uses the default text colour
 		} `toml:"claude"`
 		Pi struct {
 			Enabled    bool   `toml:"enabled"`
 			SessionDir string `toml:"session_dir"` // "" = $PI_CODING_AGENT_SESSION_DIR or ~/.pi/agent/sessions
 			Enter      string `toml:"enter"`       // overrides the "enter" command for pi sessions
+			Glyph      string `toml:"glyph"`       // identifies pi sessions; "" hides it
+			Color      string `toml:"color"`       // glyph colour; "" uses the default text colour
 		} `toml:"pi"`
 		Copilot struct {
 			Enabled    bool   `toml:"enabled"`
 			SessionDir string `toml:"session_dir"` // "" = $COPILOT_HOME/session-state or ~/.copilot/session-state
 			Enter      string `toml:"enter"`       // overrides the "enter" command for copilot sessions
+			Glyph      string `toml:"glyph"`       // identifies copilot sessions; "" hides it
+			Color      string `toml:"color"`       // glyph colour; "" uses the default text colour
 		} `toml:"copilot"`
 	} `toml:"sources"`
 }
 
 // ColumnConfig bounds the width of one column. For "content" columns (dir,
-// branch, pane, title) the width is clamp(observed, Min, Max), where
+// branch, model, pane, title) the width is clamp(observed, Min, Max), where
 // observed is the longest value across visible sessions. For the "last"
 // column the width is clamp(rest, Min, Max), where rest is whatever's left
 // of the row after the other columns -- last messages are always long, so
@@ -135,6 +143,7 @@ type ColumnConfig struct {
 type ColumnBounds struct {
 	Dir    ColumnConfig `toml:"dir"`    // the project column
 	Branch ColumnConfig `toml:"branch"` // the git branch column
+	Model  ColumnConfig `toml:"model"`  // the model column
 	Pane   ColumnConfig `toml:"pane"`   // the tmux pane
 	Title  ColumnConfig `toml:"title"`  // the session title (cap in preview "column" mode)
 	Last   ColumnConfig `toml:"last"`   // the last message (preview "column" mode only)

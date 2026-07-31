@@ -76,6 +76,9 @@ fg = "4"
 [styles.branch]    # the git branch column
 fg = "5"
 
+[styles.model]     # the agent model column
+fg = "6"
+
 [styles.subject]   # the session title column (left unset = default text colour)
 
 [styles.worktree]  # marker shown next to worktree projects
@@ -95,8 +98,16 @@ branch = ""   # nf-pl-branch
 # full path either way.
 project = "full"
 
+[display.model_replacements]
+# Literal fragment replacements for model names in the UI. Uncomment either
+# form for "claude-opus-5" -> "opus-5" or "cl-opus-5", and shorten
+# "gpt-5.6-sol" -> "5.6-sol". Search matches both raw and displayed names.
+# "claude-" = ""
+# "claude-" = "cl-"
+# "gpt-" = ""
+
 [columns]
-# Width bounds for each column. The "content" columns (dir, branch, pane,
+# Width bounds for each column. The "content" columns (dir, branch, model, pane,
 # title) size to the longest value across visible sessions, clamped
 # between min and max. The "last" column uses the config directly -- last
 # messages are always long, so the bound is the column width.
@@ -105,6 +116,7 @@ project = "full"
 # column to a fixed width, restoring the old behaviour.
 dir    = { min = 8,  max = 28 }   # the project column
 branch = { min = 8,  max = 24 }   # the git branch column
+model  = { min = 0,  max = 24 }   # the agent model; min=0 lets it collapse
 pane   = { min = 0,  max = 12 }   # the tmux pane; min=0 lets it collapse
 title  = { min = 0,  max = 30 }   # the session title (cap in preview "column" mode)
 last   = { min = 0,  max = 100 }  # the last message (preview "column" mode only)
@@ -265,12 +277,18 @@ tmux send-keys -t "$p" "claude {text-input:Prompt}" Enter
 # the default below (enabled). Disable one with enabled = false. An optional
 # `enter` per source overrides the [commands] "enter" binding for that source's
 # sessions (resume syntax differs: claude --resume vs pi --session vs
-# copilot --resume). Adding a future source means adding a [sources.<name>]
-# section here plus its adapter.
+# copilot --resume). `glyph` identifies the source beside the tmux marker;
+# set it to "" to hide that source's marker. `color` accepts the same ANSI,
+# 256-colour, and hex values as style `fg`. Adding a future source means adding
+# a [sources.<name>] section here plus its adapter.
 [sources.claude]
 enabled = true
+glyph = "✻"
+color = "208" # orange
 [sources.pi]
 enabled = true
+glyph = "◆"
+color = "12" # blue
 # session_dir = ""   # override; empty = $PI_CODING_AGENT_SESSION_DIR or ~/.pi/agent/sessions
 # Jump to pi's pane (authoritative with the agent-sessions-pi-live extension,
 # else cwd-match), or resume the session in the current terminal if it has no
@@ -278,6 +296,8 @@ enabled = true
 enter = "tmux select-pane -t {pane} && tmux select-window -t {pane} && tmux switch-client -t {pane} 2>/dev/null || (cd {cwd} && pi --session {id})"
 [sources.copilot]
 enabled = true
+glyph = "" # nf-oct-copilot
+color = "10" # pastel green
 # session_dir = ""   # override; empty = $COPILOT_HOME/session-state or ~/.copilot/session-state
 # Jump to the Copilot session's pane (authoritative with the copilot-live hook,
 # see extensions/copilot-live, else cwd-match), or resume it in the current
@@ -297,5 +317,6 @@ enter = "tmux select-pane -t {pane} && tmux select-window -t {pane} && tmux swit
 #   [styles.time]     fg = "#6c7086"                # overlay0
 #   [styles.project]  fg = "#89b4fa"                # blue
 #   [styles.branch]   fg = "#cba6f7"                # mauve
+#   [styles.model]    fg = "#89dceb"                # sky
 #   [styles.subject]  fg = "#cdd6f4"                # text
 #   [styles.preview]  fg = "#9399b2"                # overlay2
