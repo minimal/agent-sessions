@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -31,6 +32,11 @@ type Adapter interface {
 	// a no-op; their sessions surface as offline but still sort to the top by
 	// activity/mtime. Each adapter only touches sessions it produced (by Source).
 	Live(sessions []Session)
+
+	// TrashPaths returns every path owned by a session that must move together
+	// when it is trashed. Implementations validate their source-specific layout
+	// so a malformed Session cannot move a parent or neighbouring session.
+	TrashPaths(Session) ([]string, error)
 }
 
 // headScanBytes/tailScanBytes are the byte windows JSONL adapters scan: the
@@ -224,10 +230,25 @@ func isWorktreeCached(cwd string, cache map[string]bool) bool {
 type multiLoader struct {
 	adapters []Adapter
 	sortDims []sortDim
+	trasher  trasher
 }
 
 func newMultiLoader(adapters []Adapter, sortDims []sortDim) *multiLoader {
-	return &multiLoader{adapters: adapters, sortDims: sortDims}
+	return &multiLoader{adapters: adapters, sortDims: sortDims, trasher: systemTrasher()}
+}
+
+func (ml *multiLoader) Trash(s Session) error {
+	for _, adapter := range ml.adapters {
+		if adapter.Name() != s.Source {
+			continue
+		}
+		paths, err := adapter.TrashPaths(s)
+		if err != nil {
+			return err
+		}
+		return ml.trasher.Put(paths...)
+	}
+	return fmt.Errorf("trash session %q: unknown source %q", s.ID, s.Source)
 }
 
 func (ml *multiLoader) Load() ([]Session, error) {

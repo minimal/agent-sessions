@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -58,6 +59,27 @@ func newCopilotAdapter(dir string) *copilotAdapter {
 }
 
 func (a *copilotAdapter) Name() string { return "copilot" }
+
+func (a *copilotAdapter) TrashPaths(s Session) ([]string, error) {
+	if s.Source != a.Name() {
+		return nil, fmt.Errorf("trash session %q: source is %q, want %q", s.ID, s.Source, a.Name())
+	}
+	if filepath.Base(s.File) != "events.jsonl" {
+		return nil, fmt.Errorf("trash Copilot session %q: transcript is not events.jsonl", s.ID)
+	}
+	root, err := filepath.Abs(a.root())
+	if err != nil {
+		return nil, fmt.Errorf("trash Copilot session %q: resolve session root: %w", s.ID, err)
+	}
+	sessionDir, err := filepath.Abs(filepath.Dir(s.File))
+	if err != nil {
+		return nil, fmt.Errorf("trash Copilot session %q: resolve session directory: %w", s.ID, err)
+	}
+	if filepath.Dir(sessionDir) != root || filepath.Base(sessionDir) != s.ID {
+		return nil, fmt.Errorf("trash Copilot session %q: session directory is outside the configured root", s.ID)
+	}
+	return []string{sessionDir}, nil
+}
 
 // root resolves the session-state directory: explicit config -> $COPILOT_HOME
 // -> default ~/.copilot/session-state.

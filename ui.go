@@ -740,11 +740,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s := *m.deleting
 			m.deleting = nil
 			if msg.String() == "y" {
-				if err := s.Delete(); err != nil {
-					m.notice = "delete: " + err.Error()
+				if err := m.loader.Trash(s); err != nil {
+					m.notice = "trash: " + err.Error()
 					return m, nil
 				}
-				m.notice = fmt.Sprintf("Deleted %q.", s.Subject())
+				m.notice = fmt.Sprintf("Moved %q to Trash.", s.Subject())
 				if !m.loading {
 					m.loading = true
 					return m, m.loadCmd
@@ -1375,7 +1375,7 @@ func (m model) View() string {
 		status = m.prompt.label + ": " + m.inputView(m.prompt.label+": ")
 	}
 	if m.deleting != nil {
-		status = fmt.Sprintf("Delete %q? (y/n)", m.deleting.Subject())
+		status = fmt.Sprintf("Move %q to Trash? (y/n)", m.deleting.Subject())
 	}
 	b.WriteString(m.styles.bar.Render(pad(status, m.width)))
 	return b.String()
@@ -1421,7 +1421,7 @@ func (m model) helpView() string {
 		"    /                  search; Enter keeps the filter, Esc clears it",
 		"    f                  filter menu: p by project, b by branch (pickers)",
 		"    o                  toggle showing only sessions with a running claude process",
-		"    d                  delete session (transcript + sidecar files; asks y/n)",
+		"    d                  move session to Trash (asks y/n)",
 		mouseHelp,
 		"    r                  refresh now",
 		"    ?                  this help",

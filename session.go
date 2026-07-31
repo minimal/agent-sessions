@@ -84,15 +84,6 @@ func displayPath(path string) string {
 	return path
 }
 
-// Delete removes the session's transcript and its sidecar directory
-// (subagent transcripts, tool results).
-func (s Session) Delete() error {
-	if err := os.Remove(s.File); err != nil {
-		return err
-	}
-	return os.RemoveAll(strings.TrimSuffix(s.File, ".jsonl"))
-}
-
 // Dir is the working directory's final path segment, e.g. "agent-sessions"
 // for "~/code/scratch/agent-sessions". Used when the project column is
 // configured to show just the name rather than the full path.

@@ -85,6 +85,10 @@ type Adapter interface {
     // a no-op; sessions then surface as "offline" but still sort to the
     // top by activity/mtime.
     Live(sessions []Session)
+
+    // TrashPaths returns all paths owned by a session. Core moves them to
+    // Trash together; the adapter validates its source-specific disk layout.
+    TrashPaths(Session) ([]string, error)
 }
 ```
 
