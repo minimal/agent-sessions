@@ -34,6 +34,9 @@ const doubleClickWithin = 400 * time.Millisecond
 // Sessions with no live process and no activity for this long are dimmed.
 const dimAfter = 24 * time.Hour
 
+// Keep agent-generated subjects from overwhelming status-bar prompts.
+const trashSubjectMaxWidth = 80
+
 // colCI is the fixed width of the CI column (gated by [circleci].token).
 // The dir, branch, model, pane, title and last columns are sized dynamically per
 // the [columns] config -- see widths and computeWidths.
@@ -1101,7 +1104,9 @@ func (m model) trashSession(s Session) (tea.Model, tea.Cmd) {
 		m.notice = "trash: " + err.Error()
 		return m, nil
 	}
-	m.notice = fmt.Sprintf("Moved %q to Trash.", s.Subject())
+	const prefix = "Moved "
+	const suffix = " to Trash."
+	m.notice = prefix + m.trashSubject(s.Subject(), lipgloss.Width(prefix+suffix)) + suffix
 	if !m.loading {
 		m.loading = true
 		return m, m.loadCmd
@@ -1419,13 +1424,19 @@ func (m model) View() string {
 	if m.deleting != nil {
 		s := m.deleting.session
 		if m.deleting.typed {
-			label := fmt.Sprintf(
-				"%q is %s, over the %s quick limit. Type yes to move to Trash: ",
-				s.Subject(), displaySize(s.Size), displaySize(m.quickTrashMax),
+			suffix := fmt.Sprintf(
+				" is %s, over the %s quick limit. Type yes to move to Trash: ",
+				displaySize(s.Size), displaySize(m.quickTrashMax),
 			)
+			label := m.trashSubject(s.Subject(), lipgloss.Width(suffix)+8) + suffix
 			status = label + m.inputView(label)
 		} else {
-			status = fmt.Sprintf("Move %q [%s] to Trash? (y/n)", s.Subject(), displaySize(s.Size))
+			const prefix = "Move "
+			suffix := fmt.Sprintf(" [%s] to Trash? (y/n)", displaySize(s.Size))
+			status = prefix + m.trashSubject(
+				s.Subject(),
+				lipgloss.Width(prefix+suffix),
+			) + suffix
 		}
 	}
 	b.WriteString(m.styles.bar.Render(pad(status, m.width)))
@@ -1943,6 +1954,19 @@ func pad(s string, w int) string {
 
 func trunc(s string, w int) string {
 	return ansi.Truncate(s, w, "…")
+}
+
+func (m model) trashSubject(subject string, reserved int) string {
+	w := trashSubjectMaxWidth
+	if m.width > 0 {
+		w = min(w, max(3, m.width-reserved))
+	}
+
+	quoted := strconv.Quote(subject)
+	if lipgloss.Width(quoted) <= w {
+		return quoted
+	}
+	return `"` + trunc(quoted[1:len(quoted)-1], w-2) + `"`
 }
 
 func truncPad(s string, w int) string {
