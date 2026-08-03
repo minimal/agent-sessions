@@ -2,16 +2,20 @@ package main
 
 import (
 	"bufio"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 // copilotLine covers the JSONL fields the GitHub Copilot CLI writes to a
@@ -45,12 +49,13 @@ type copilotLine struct {
 // (extensions/copilot-live); without it, Copilot's inuse.<pid>.lock files still
 // identify active sessions, while a cwd-based tmux match supplies the pane.
 type copilotAdapter struct {
-	dir   string // override; "" = env/default
-	cache *transcriptCache
+	dir     string // override; "" = env/default
+	usageDB string
+	cache   *transcriptCache
 }
 
 func newCopilotAdapter(dir string) *copilotAdapter {
-	a := &copilotAdapter{dir: dir}
+	a := &copilotAdapter{dir: dir, usageDB: copilotUsageDB()}
 	a.cache = newTranscriptCache(
 		func() ([]string, error) { return discoverCopilot(a.root()) },
 		parseCopilot,
@@ -81,20 +86,36 @@ func (a *copilotAdapter) TrashPaths(s Session) ([]string, error) {
 	return []string{sessionDir}, nil
 }
 
-// root resolves the session-state directory: explicit config -> $COPILOT_HOME
-// -> default ~/.copilot/session-state.
-func (a *copilotAdapter) root() string {
-	if a.dir != "" {
-		return a.dir
-	}
+// copilotHome resolves $COPILOT_HOME, falling back to ~/.copilot.
+func copilotHome() string {
 	if env := os.Getenv("COPILOT_HOME"); env != "" {
-		return filepath.Join(env, "session-state")
+		return env
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".copilot", "session-state")
+	return filepath.Join(home, ".copilot")
+}
+
+func copilotUsageDB() string {
+	home := copilotHome()
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, "session-store.db")
+}
+
+// root resolves the session-state directory: explicit config -> Copilot home.
+func (a *copilotAdapter) root() string {
+	if a.dir != "" {
+		return a.dir
+	}
+	home := copilotHome()
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, "session-state")
 }
 
 func (a *copilotAdapter) Sessions() ([]Session, error) {
@@ -105,7 +126,92 @@ func (a *copilotAdapter) Sessions() ([]Session, error) {
 	for i := range sessions {
 		sessions[i].Source = "copilot"
 	}
+	tokens, err := copilotContextTokens(a.usageDB, sessions)
+	if err != nil {
+		return nil, err
+	}
+	for i := range sessions {
+		sessions[i].CtxTokens = tokens[sessions[i].ID]
+	}
 	return sessions, nil
+}
+
+// copilotContextTokens reads the latest root-agent usage row for each loaded
+// Copilot session. Copilot stores cached input inside input_tokens already, so
+// cache_read_tokens and cache_write_tokens must not be added again.
+func copilotContextTokens(path string, sessions []Session) (map[string]int, error) {
+	tokens := make(map[string]int, len(sessions))
+	if path == "" || len(sessions) == 0 {
+		return tokens, nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return tokens, nil
+		}
+		return nil, fmt.Errorf("read Copilot usage database: %w", err)
+	}
+
+	db, err := sql.Open("sqlite", copilotSQLiteDSN(path))
+	if err != nil {
+		return nil, fmt.Errorf("open Copilot usage database: %w", err)
+	}
+	defer db.Close()
+
+	var tableExists int
+	err = db.QueryRow(`
+		SELECT 1
+		FROM sqlite_master
+		WHERE type = 'table' AND name = 'assistant_usage_events'
+	`).Scan(&tableExists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return tokens, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("inspect Copilot usage database: %w", err)
+	}
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(sessions)), ",")
+	args := make([]any, len(sessions))
+	for i := range sessions {
+		args[i] = sessions[i].ID
+	}
+	query := `
+		SELECT usage.session_id,
+		       COALESCE(usage.input_tokens, 0) + COALESCE(usage.output_tokens, 0)
+		FROM assistant_usage_events AS usage
+		JOIN (
+			SELECT session_id, MAX(id) AS id
+			FROM assistant_usage_events
+			WHERE agent_id IS NULL AND session_id IN (` + placeholders + `)
+			GROUP BY session_id
+		) AS latest ON latest.id = usage.id
+	`
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query Copilot usage database: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sessionID string
+		var total int
+		if err := rows.Scan(&sessionID, &total); err != nil {
+			return nil, fmt.Errorf("scan Copilot usage database: %w", err)
+		}
+		tokens[sessionID] = total
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read Copilot usage database: %w", err)
+	}
+	return tokens, nil
+}
+
+func copilotSQLiteDSN(path string) string {
+	u := &url.URL{Scheme: "file", Path: path}
+	q := u.Query()
+	q.Set("mode", "ro")
+	q.Set("_query_only", "true")
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 // copilotLiveMarker is the JSON file written by the copilot-live hook (see

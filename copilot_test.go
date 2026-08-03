@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -8,6 +9,50 @@ import (
 	"testing"
 	"time"
 )
+
+type copilotUsageRow struct {
+	sessionID        string
+	agentID          any
+	inputTokens      any
+	outputTokens     any
+	cacheReadTokens  any
+	cacheWriteTokens any
+}
+
+func writeCopilotUsageDB(t *testing.T, path string, rows []copilotUsageRow) {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	_, err = db.Exec(`
+		CREATE TABLE assistant_usage_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			agent_id TEXT,
+			input_tokens INTEGER,
+			output_tokens INTEGER,
+			cache_read_tokens INTEGER,
+			cache_write_tokens INTEGER
+		)
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		_, err := db.Exec(`
+			INSERT INTO assistant_usage_events (
+				session_id, agent_id, input_tokens, output_tokens,
+				cache_read_tokens, cache_write_tokens
+			) VALUES (?, ?, ?, ?, ?, ?)
+		`, row.sessionID, row.agentID, row.inputTokens, row.outputTokens,
+			row.cacheReadTokens, row.cacheWriteTokens)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 // writeCopilotSession creates a session-state dir <root>/<sid>/ with the given
 // events.jsonl lines and (optionally) a workspace.yaml, returning nothing. It
@@ -100,6 +145,105 @@ func TestCopilotTitleFallsBackToPrompt(t *testing.T) {
 	}
 	if sessions[0].Title != "Fix the parser" {
 		t.Errorf("Title = %q, want the first line of the first user prompt", sessions[0].Title)
+	}
+}
+
+func TestCopilotPathsRespectCopilotHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("COPILOT_HOME", home)
+	adapter := newCopilotAdapter("")
+	if got, want := adapter.root(), filepath.Join(home, "session-state"); got != want {
+		t.Errorf("root() = %q, want %q", got, want)
+	}
+	if got, want := adapter.usageDB, filepath.Join(home, "session-store.db"); got != want {
+		t.Errorf("usageDB = %q, want %q", got, want)
+	}
+}
+
+func TestCopilotSessionsLoadLatestRootUsage(t *testing.T) {
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "session-state")
+	for _, sid := range []string{"session-a", "session-b", "session-without-usage"} {
+		writeCopilotSession(t, root, sid, []string{
+			`{"type":"session.start","timestamp":"2026-07-02T15:03:27.361Z","data":{"sessionId":"` + sid + `","context":{"cwd":"/tmp"}}}`,
+		}, "")
+	}
+
+	usageDB := filepath.Join(tmp, "session-store.db")
+	writeCopilotUsageDB(t, usageDB, []copilotUsageRow{
+		{sessionID: "session-a", inputTokens: 10, outputTokens: 1},
+		{sessionID: "session-a", inputTokens: 100, outputTokens: 10, cacheReadTokens: 40, cacheWriteTokens: 50},
+		{sessionID: "session-a", agentID: "subagent-1", inputTokens: 900, outputTokens: 90},
+		{sessionID: "session-b", agentID: "subagent-2", inputTokens: 800, outputTokens: 80},
+		{sessionID: "session-b", inputTokens: 200, outputTokens: 20, cacheReadTokens: 60, cacheWriteTokens: 70},
+		{sessionID: "unloaded-session", inputTokens: 700, outputTokens: 70},
+	})
+
+	adapter := newCopilotAdapter(root)
+	adapter.usageDB = usageDB
+	sessions, err := adapter.Sessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[string]int, len(sessions))
+	for _, session := range sessions {
+		got[session.ID] = session.CtxTokens
+	}
+	want := map[string]int{
+		"session-a":             110,
+		"session-b":             220,
+		"session-without-usage": 0,
+	}
+	for sid, wantTokens := range want {
+		if got[sid] != wantTokens {
+			t.Errorf("%s CtxTokens = %d, want %d", sid, got[sid], wantTokens)
+		}
+	}
+}
+
+func TestCopilotSessionsWithoutUsageSchema(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		oldDB bool
+	}{
+		{name: "missing database"},
+		{name: "database from older Copilot", oldDB: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			root := filepath.Join(tmp, "session-state")
+			writeCopilotSession(t, root, "session-a", []string{
+				`{"type":"session.start","timestamp":"2026-07-02T15:03:27.361Z","data":{"sessionId":"session-a","context":{"cwd":"/tmp"}}}`,
+			}, "")
+
+			usageDB := filepath.Join(tmp, "session-store.db")
+			if tc.oldDB {
+				db, err := sql.Open("sqlite", usageDB)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := db.Exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY)`); err != nil {
+					db.Close()
+					t.Fatal(err)
+				}
+				if err := db.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			adapter := newCopilotAdapter(root)
+			adapter.usageDB = usageDB
+			sessions, err := adapter.Sessions()
+			if err != nil {
+				t.Fatalf("Sessions() should tolerate unavailable usage data: %v", err)
+			}
+			if len(sessions) != 1 {
+				t.Fatalf("got %d sessions, want 1", len(sessions))
+			}
+			if sessions[0].CtxTokens != 0 {
+				t.Errorf("CtxTokens = %d, want 0", sessions[0].CtxTokens)
+			}
+		})
 	}
 }
 
