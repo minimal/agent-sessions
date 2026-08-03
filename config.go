@@ -46,6 +46,9 @@ type Config struct {
 		Token    string            `toml:"token"`
 		Projects map[string]string `toml:"projects"`
 	} `toml:"circleci"`
+	Ctx struct {
+		Enabled bool `toml:"enabled"` // show context usage reported by supported sources
+	} `toml:"ctx"`
 	Icons struct {
 		Branch string `toml:"branch"` // shown before the branch; "" hides it
 		Dir    string `toml:"dir"`    // shown before the directory; "" hides it

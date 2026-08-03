@@ -37,10 +37,13 @@ const dimAfter = 24 * time.Hour
 // Keep agent-generated subjects from overwhelming status-bar prompts.
 const trashSubjectMaxWidth = 80
 
-// colCI is the fixed width of the CI column (gated by [circleci].token).
+// colCI and colCtx are fixed-width columns, gated by their config sections.
 // The dir, branch, model, pane, title and last columns are sized dynamically per
 // the [columns] config -- see widths and computeWidths.
-const colCI = 4
+const (
+	colCI  = 4
+	colCtx = 5
+)
 
 // colState fits every state word the index can show.
 var colState = func() int {
@@ -164,6 +167,7 @@ type model struct {
 	previewWithin  time.Duration
 	commands       map[string]string // key name -> command template
 	quickTrashMax  int64             // transcript bytes allowed to use the y/n Trash prompt
+	showCtx        bool              // [ctx].enabled
 	ciToken        string            // "" disables the CI column
 	ciSlugs        map[string]string // cwd -> CircleCI project slug ("" = none)
 	colCfg         ColumnBounds      // per-column width bounds from [columns]
@@ -297,6 +301,7 @@ func newModel(cfg Config) model {
 		previewRecent:  cfg.Preview.Recent,
 		previewWithin:  cfg.PreviewWithin(),
 		quickTrashMax:  cfg.QuickTrashThresholdBytes,
+		showCtx:        cfg.Ctx.Enabled,
 		ciToken:        cfg.ciToken(),
 		ciSlugs:        cfg.ciOverrides(),
 		colCfg:         cfg.Columns,
@@ -1684,6 +1689,12 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 		emit(seg(m.styles.model, truncPad(m.displayModel(s), m.widths.model)))
 	}
 
+	// ctx column (gated by [ctx].enabled).
+	if m.showCtx {
+		text, style := ctxCell(s)
+		emit(seg(style, truncPad(text, colCtx)))
+	}
+
 	// pane column.
 	if m.widths.pane > 0 {
 		emit(seg(lipgloss.NewStyle(), truncPad(s.Pane, m.widths.pane)))
@@ -1756,6 +1767,24 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 		}
 	}
 	return trunc(line, m.width)
+}
+
+func ctxCell(s Session) (text string, style lipgloss.Style) {
+	style = lipgloss.NewStyle()
+	if s.CtxTokens <= 0 {
+		return "", style
+	}
+
+	roundedK := (s.CtxTokens + 500) / 1000
+	if roundedK < 1000 {
+		return fmt.Sprintf("%dk", roundedK), style
+	}
+
+	tenths := (s.CtxTokens + 50_000) / 100_000
+	if tenths%10 == 0 {
+		return fmt.Sprintf("%dM", tenths/10), style
+	}
+	return fmt.Sprintf("%d.%dM", tenths/10, tenths%10), style
 }
 
 // overlay layers the set attributes of ov onto base (ov wins), used to apply a

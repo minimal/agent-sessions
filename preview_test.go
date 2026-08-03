@@ -68,6 +68,113 @@ func TestActivityIgnoresTimestamplessLines(t *testing.T) {
 	}
 }
 
+func TestClaudeContextTokensUseLatestAssistantEntry(t *testing.T) {
+	var s Session
+	var first transcriptLine
+	if err := json.Unmarshal([]byte(`{
+		"type": "assistant",
+		"message": {
+			"role": "assistant",
+			"usage": {
+				"input_tokens": 1000,
+				"cache_creation_input_tokens": 2000,
+				"cache_read_input_tokens": 3000,
+				"output_tokens": 9000
+			}
+		}
+	}`), &first); err != nil {
+		t.Fatal(err)
+	}
+	absorb(&s, first)
+	if s.CtxTokens != 6000 {
+		t.Fatalf("context tokens = %d, want 6000 (input and cache tokens only)", s.CtxTokens)
+	}
+
+	absorb(&s, transcriptLine{
+		Type: "assistant",
+		Message: &transcriptMessage{
+			Role: "assistant",
+			Usage: &Usage{
+				InputTokens:              4000,
+				CacheCreationInputTokens: 5000,
+				CacheReadInputTokens:     6000,
+				OutputTokens:             7000,
+			},
+		},
+	})
+	if s.CtxTokens != 15000 {
+		t.Errorf("context tokens = %d, want latest assistant entry's 15000", s.CtxTokens)
+	}
+
+	absorb(&s, transcriptLine{
+		Type:    "assistant",
+		Message: &transcriptMessage{Role: "assistant"},
+	})
+	if s.CtxTokens != 0 {
+		t.Errorf("assistant entry without usage should clear stale context tokens, got %d", s.CtxTokens)
+	}
+}
+
+func TestCtxCell(t *testing.T) {
+	cases := []struct {
+		tokens int
+		want   string
+	}{
+		{0, ""},
+		{152_000, "152k"},
+		{152_500, "153k"},
+		{999_500, "1M"},
+		{1_200_000, "1.2M"},
+		{1_250_000, "1.3M"},
+	}
+	for _, c := range cases {
+		got, _ := ctxCell(Session{CtxTokens: c.tokens})
+		if got != c.want {
+			t.Errorf("ctxCell(%d) = %q, want %q", c.tokens, got, c.want)
+		}
+	}
+}
+
+func TestCtxColumnToggleAndAlignment(t *testing.T) {
+	sessions := []Session{
+		{ID: "a", Title: "one", CtxTokens: 152_000, Modified: time.Now()},
+		{ID: "b", Title: "two", Modified: time.Now()},
+	}
+	m := testModel(previewRow, sessions)
+	m.width = 1000
+	m.showCtx = true
+	withCtx := m.renderRow(0, false, lipgloss.NewStyle(), false)
+	blankCtx := m.renderRow(1, false, lipgloss.NewStyle(), false)
+	if !strings.Contains(withCtx, "152k") {
+		t.Errorf("enabled ctx column should show usage, got:\n%s", withCtx)
+	}
+	if strings.Index(withCtx, "one") != strings.Index(blankCtx, "two") {
+		t.Errorf("blank ctx cells should preserve following-column alignment:\n%s\n%s", withCtx, blankCtx)
+	}
+
+	m.showCtx = false
+	withoutCtx := m.renderRow(0, false, lipgloss.NewStyle(), false)
+	if strings.Contains(withoutCtx, "152k") {
+		t.Errorf("disabled ctx column should hide usage, got:\n%s", withoutCtx)
+	}
+	if delta := lipgloss.Width(withCtx) - lipgloss.Width(withoutCtx); delta != colCtx+2 {
+		t.Errorf("disabled ctx column width delta = %d, want %d", delta, colCtx+2)
+	}
+}
+
+func TestDefaultConfigEnablesCtxColumn(t *testing.T) {
+	var cfg Config
+	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Ctx.Enabled {
+		t.Error("default [ctx].enabled should show the context column")
+	}
+	if !newModel(cfg).showCtx {
+		t.Error("newModel should carry [ctx].enabled into the row renderer")
+	}
+}
+
 func TestRowModePreviews(t *testing.T) {
 	now := time.Now()
 	sessions := []Session{
