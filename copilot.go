@@ -49,10 +49,28 @@ type copilotLine struct {
 // Authoritative state comes from marker files written by the bundled hook
 // (extensions/copilot-live); without it, Copilot's inuse.<pid>.lock files still
 // identify active sessions, while a cwd-based tmux match supplies the pane.
+// copilotINChunkSize caps the number of session_id bind vars per query in
+// contextTokens. SQLite's SQLITE_MAX_VARIABLE_NUMBER is 999 in older builds
+// and 32766 in newer ones; 500 leaves comfortable headroom on every supported
+// SQLite without making the per-row IN list trivially small. The query joins
+// the latest row per session and the chunked IN runs N/500 times instead of
+// once with N bind vars.
+const copilotINChunkSize = 500
+
 type copilotAdapter struct {
 	dir     string // override; "" = env/default
 	usageDB string
 	cache   *transcriptCache
+
+	// usageCache memoizes the result of contextTokens across Sessions() calls
+	// within one process. The cache is keyed on the usage DB mtime: a refresh
+	// between two Copilot writes sees the same mtime, skips the sqlite open,
+	// schema probe, and query, and returns the prior result. A real Copilot
+	// commit bumps the mtime and forces a re-read. New sessions (no key in
+	// the cached map) naturally read as 0, matching a cold cache; sessions
+	// that disappear simply drop their key.
+	usageCache     map[string]int
+	usageCacheMtime time.Time
 }
 
 func newCopilotAdapter(dir string) *copilotAdapter {
@@ -127,7 +145,7 @@ func (a *copilotAdapter) Sessions() ([]Session, error) {
 	for i := range sessions {
 		sessions[i].Source = "copilot"
 	}
-	tokens, err := copilotContextTokens(a.usageDB, sessions)
+	tokens, err := a.contextTokens(sessions)
 	if err != nil {
 		return nil, err
 	}
@@ -137,32 +155,46 @@ func (a *copilotAdapter) Sessions() ([]Session, error) {
 	return sessions, nil
 }
 
-// copilotContextTokens reads the latest root-agent usage row for each loaded
+// contextTokens reads the latest root-agent usage row for each loaded
 // Copilot session. Copilot stores cached input inside input_tokens already, so
 // cache_read_tokens and cache_write_tokens must not be added again.
 //
+// The result is memoized across Sessions() calls: when the usage DB mtime is
+// unchanged from the last successful read, the cached map is returned and the
+// sqlite open, schema probe, and query are all skipped. New sessions in the
+// list (no entry in the cache) read as 0, matching a cold cache. Copilot
+// commits bump the DB mtime and force a re-read.
+//
 // Fails open: any error talking to the usage DB (missing file, missing table,
-// SQLITE_BUSY from a concurrent Copilot write, corrupt DB, schema drift) is
-// logged and surfaces as an empty token map. The non-Copilot sessions must
-// still load, so multiLoader.Load() can keep merging Claude/pi/etc. on top
-// of a degraded Copilot read. The ctx column is the only thing that goes
-// blank; the rest of the session list is unaffected.
-func copilotContextTokens(path string, sessions []Session) (map[string]int, error) {
+// SQLITE_BUSY from a concurrent Copilot write, corrupt DB, schema drift, too
+// many bind vars on a malformed query) is logged and surfaces as an empty
+// token map. The non-Copilot sessions must still load, so multiLoader.Load()
+// can keep merging Claude/pi/etc. on top of a degraded Copilot read. The ctx
+// column is the only thing that goes blank; the rest of the session list is
+// unaffected. A failure invalidates the cache so the next refresh retries the
+// DB read.
+func (a *copilotAdapter) contextTokens(sessions []Session) (map[string]int, error) {
+	path := a.usageDB
 	tokens := make(map[string]int, len(sessions))
 	if path == "" || len(sessions) == 0 {
 		return tokens, nil
 	}
-	if _, err := os.Stat(path); err != nil {
+	info, err := os.Stat(path)
+	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return tokens, nil
 		}
 		log.Printf("copilot usage db: stat %s: %v (ctx column will be blank)", path, err)
 		return tokens, nil
 	}
+	if a.usageCache != nil && info.ModTime().Equal(a.usageCacheMtime) {
+		return a.usageCache, nil
+	}
 
 	db, err := sql.Open("sqlite", copilotSQLiteDSN(path))
 	if err != nil {
 		log.Printf("copilot usage db: open %s: %v (ctx column will be blank)", path, err)
+		a.usageCache = nil
 		return tokens, nil
 	}
 	defer db.Close()
@@ -174,48 +206,65 @@ func copilotContextTokens(path string, sessions []Session) (map[string]int, erro
 		WHERE type = 'table' AND name = 'assistant_usage_events'
 	`).Scan(&tableExists)
 	if errors.Is(err, sql.ErrNoRows) {
+		a.usageCache = tokens
+		a.usageCacheMtime = info.ModTime()
 		return tokens, nil
 	}
 	if err != nil {
 		log.Printf("copilot usage db: inspect schema: %v (ctx column will be blank)", err)
+		a.usageCache = nil
 		return tokens, nil
 	}
 
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(sessions)), ",")
-	args := make([]any, len(sessions))
-	for i := range sessions {
-		args[i] = sessions[i].ID
-	}
-	query := `
-		SELECT usage.session_id,
-		       COALESCE(usage.input_tokens, 0)
-		FROM assistant_usage_events AS usage
-		JOIN (
-			SELECT session_id, MAX(id) AS id
-			FROM assistant_usage_events
-			WHERE agent_id IS NULL AND session_id IN (` + placeholders + `)
-			GROUP BY session_id
-		) AS latest ON latest.id = usage.id
-	`
-	rows, err := db.Query(query, args...)
-	if err != nil {
-		log.Printf("copilot usage db: query: %v (ctx column will be blank)", err)
-		return tokens, nil
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var sessionID string
-		var total int
-		if err := rows.Scan(&sessionID, &total); err != nil {
-			log.Printf("copilot usage db: scan: %v (ctx column will be blank)", err)
+	for start := 0; start < len(sessions); start += copilotINChunkSize {
+		end := start + copilotINChunkSize
+		if end > len(sessions) {
+			end = len(sessions)
+		}
+		chunk := sessions[start:end]
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
+		args := make([]any, len(chunk))
+		for i := range chunk {
+			args[i] = chunk[i].ID
+		}
+		query := `
+			SELECT usage.session_id,
+			       COALESCE(usage.input_tokens, 0)
+			FROM assistant_usage_events AS usage
+			JOIN (
+				SELECT session_id, MAX(id) AS id
+				FROM assistant_usage_events
+				WHERE agent_id IS NULL AND session_id IN (` + placeholders + `)
+				GROUP BY session_id
+			) AS latest ON latest.id = usage.id
+		`
+		rows, err := db.Query(query, args...)
+		if err != nil {
+			log.Printf("copilot usage db: query: %v (ctx column will be blank)", err)
+			a.usageCache = nil
 			return tokens, nil
 		}
-		tokens[sessionID] = total
+		for rows.Next() {
+			var sessionID string
+			var total int
+			if err := rows.Scan(&sessionID, &total); err != nil {
+				rows.Close()
+				log.Printf("copilot usage db: scan: %v (ctx column will be blank)", err)
+				a.usageCache = nil
+				return tokens, nil
+			}
+			tokens[sessionID] = total
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			log.Printf("copilot usage db: read: %v (ctx column will be blank)", err)
+			a.usageCache = nil
+			return tokens, nil
+		}
+		rows.Close()
 	}
-	if err := rows.Err(); err != nil {
-		log.Printf("copilot usage db: read: %v (ctx column will be blank)", err)
-		return tokens, nil
-	}
+	a.usageCache = tokens
+	a.usageCacheMtime = info.ModTime()
 	return tokens, nil
 }
 
