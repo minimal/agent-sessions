@@ -176,6 +176,12 @@ func TestCopilotSessionsLoadLatestRootUsage(t *testing.T) {
 		{sessionID: "session-a", agentID: "subagent-1", inputTokens: 900, outputTokens: 90},
 		{sessionID: "session-b", agentID: "subagent-2", inputTokens: 800, outputTokens: 80},
 		{sessionID: "session-b", inputTokens: 200, outputTokens: 20, cacheReadTokens: 60, cacheWriteTokens: 70},
+		// Regression for the "ctx includes output tokens" bug: cache_read /
+		// cache_write columns must never contribute to CtxTokens. Copilot folds
+		// cached input into input_tokens itself (per copilotContextTokens),
+		// and the ctx column is meant to be the context-window occupancy
+		// (input-side), matching Claude. If a future change re-adds these
+		// columns, the expected 100 / 200 below will surface it.
 		{sessionID: "unloaded-session", inputTokens: 700, outputTokens: 70},
 	})
 
@@ -190,14 +196,49 @@ func TestCopilotSessionsLoadLatestRootUsage(t *testing.T) {
 		got[session.ID] = session.CtxTokens
 	}
 	want := map[string]int{
-		"session-a":             110,
-		"session-b":             220,
+		"session-a":             100,
+		"session-b":             200,
 		"session-without-usage": 0,
 	}
 	for sid, wantTokens := range want {
 		if got[sid] != wantTokens {
 			t.Errorf("%s CtxTokens = %d, want %d", sid, got[sid], wantTokens)
 		}
+	}
+}
+
+func TestCopilotSessionsFailsOpenOnCorruptUsageDB(t *testing.T) {
+	// Regression: a usage-DB read failure (any failure, not just missing
+	// file/table) must not blank the entire session list. A live Copilot write
+	// that holds the -wal lock, a corrupt DB, or a permission error all hit
+	// this path; multiLoader.Load() used to propagate the first adapter error
+	// and discard the already-loaded Claude/pi sessions, so the TUI showed
+	// "Error: ..." and rendered nothing.
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "session-state")
+	writeCopilotSession(t, root, "session-a", []string{
+		`{"type":"session.start","timestamp":"2026-07-02T15:03:27.361Z","data":{"sessionId":"session-a","context":{"cwd":"/tmp"}}}`,
+	}, "")
+
+	// A file that is a valid SQLite header tail but the body is garbage, so
+	// opening it for a query fails (not a missing-file or missing-table
+	// failure, both of which were already tolerated).
+	usageDB := filepath.Join(tmp, "session-store.db")
+	if err := os.WriteFile(usageDB, []byte("not a real sqlite database"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := newCopilotAdapter(root)
+	adapter.usageDB = usageDB
+	sessions, err := adapter.Sessions()
+	if err != nil {
+		t.Fatalf("Sessions() should fail open on a corrupt usage DB, got %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("got %d sessions, want 1 (the copilot session must still load)", len(sessions))
+	}
+	if sessions[0].CtxTokens != 0 {
+		t.Errorf("CtxTokens = %d, want 0 (fail-open leaves the ctx column blank)", sessions[0].CtxTokens)
 	}
 }
 

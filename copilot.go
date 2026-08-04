@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -139,6 +140,13 @@ func (a *copilotAdapter) Sessions() ([]Session, error) {
 // copilotContextTokens reads the latest root-agent usage row for each loaded
 // Copilot session. Copilot stores cached input inside input_tokens already, so
 // cache_read_tokens and cache_write_tokens must not be added again.
+//
+// Fails open: any error talking to the usage DB (missing file, missing table,
+// SQLITE_BUSY from a concurrent Copilot write, corrupt DB, schema drift) is
+// logged and surfaces as an empty token map. The non-Copilot sessions must
+// still load, so multiLoader.Load() can keep merging Claude/pi/etc. on top
+// of a degraded Copilot read. The ctx column is the only thing that goes
+// blank; the rest of the session list is unaffected.
 func copilotContextTokens(path string, sessions []Session) (map[string]int, error) {
 	tokens := make(map[string]int, len(sessions))
 	if path == "" || len(sessions) == 0 {
@@ -148,12 +156,14 @@ func copilotContextTokens(path string, sessions []Session) (map[string]int, erro
 		if errors.Is(err, fs.ErrNotExist) {
 			return tokens, nil
 		}
-		return nil, fmt.Errorf("read Copilot usage database: %w", err)
+		log.Printf("copilot usage db: stat %s: %v (ctx column will be blank)", path, err)
+		return tokens, nil
 	}
 
 	db, err := sql.Open("sqlite", copilotSQLiteDSN(path))
 	if err != nil {
-		return nil, fmt.Errorf("open Copilot usage database: %w", err)
+		log.Printf("copilot usage db: open %s: %v (ctx column will be blank)", path, err)
+		return tokens, nil
 	}
 	defer db.Close()
 
@@ -167,7 +177,8 @@ func copilotContextTokens(path string, sessions []Session) (map[string]int, erro
 		return tokens, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("inspect Copilot usage database: %w", err)
+		log.Printf("copilot usage db: inspect schema: %v (ctx column will be blank)", err)
+		return tokens, nil
 	}
 
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(sessions)), ",")
@@ -177,7 +188,7 @@ func copilotContextTokens(path string, sessions []Session) (map[string]int, erro
 	}
 	query := `
 		SELECT usage.session_id,
-		       COALESCE(usage.input_tokens, 0) + COALESCE(usage.output_tokens, 0)
+		       COALESCE(usage.input_tokens, 0)
 		FROM assistant_usage_events AS usage
 		JOIN (
 			SELECT session_id, MAX(id) AS id
@@ -188,19 +199,22 @@ func copilotContextTokens(path string, sessions []Session) (map[string]int, erro
 	`
 	rows, err := db.Query(query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query Copilot usage database: %w", err)
+		log.Printf("copilot usage db: query: %v (ctx column will be blank)", err)
+		return tokens, nil
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var sessionID string
 		var total int
 		if err := rows.Scan(&sessionID, &total); err != nil {
-			return nil, fmt.Errorf("scan Copilot usage database: %w", err)
+			log.Printf("copilot usage db: scan: %v (ctx column will be blank)", err)
+			return tokens, nil
 		}
 		tokens[sessionID] = total
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read Copilot usage database: %w", err)
+		log.Printf("copilot usage db: read: %v (ctx column will be blank)", err)
+		return tokens, nil
 	}
 	return tokens, nil
 }
@@ -210,6 +224,10 @@ func copilotSQLiteDSN(path string) string {
 	q := u.Query()
 	q.Set("mode", "ro")
 	q.Set("_query_only", "true")
+	// Tolerate a concurrent Copilot write (5s is enough for any normal commit;
+	// past that we'd rather blank the ctx column than block the whole session
+	// list, which fail-open would do anyway).
+	q.Set("_busy_timeout", "5000")
 	u.RawQuery = q.Encode()
 	return u.String()
 }
