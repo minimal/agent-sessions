@@ -25,6 +25,23 @@ type piMessage struct {
 	Content json.RawMessage `json:"content"`
 	Model   string          `json:"model"`
 	ModelID string          `json:"modelId"`
+	Usage   *piUsage        `json:"usage"`
+}
+
+// piUsage mirrors the per-message usage block pi writes on assistant lines.
+// Unlike Claude's transcriptMessage.Usage, pi's `input` is the non-cached
+// portion only; the context-window-occupancy total is
+// input + cacheRead + cacheWrite + cacheWrite1h. totalTokens is intentionally
+// ignored: it is sometimes that sum and sometimes input+output only depending
+// on the underlying provider. Unknown keys (e.g. `cost`, `reasoning`,
+// `cacheWrite1h` on older pi versions) unmarshal to zero, which is the
+// fail-open behavior we want — no migration needed.
+type piUsage struct {
+	Input        int `json:"input"`
+	Output       int `json:"output"`
+	CacheRead    int `json:"cacheRead"`
+	CacheWrite   int `json:"cacheWrite"`
+	CacheWrite1h int `json:"cacheWrite1h"`
 }
 
 type piLine struct {
@@ -408,6 +425,14 @@ func absorbPi(s *Session, l piLine) {
 			s.Model = l.Message.ModelID
 		} else if l.Message.Model != "" {
 			s.Model = l.Message.Model
+		}
+		// Keep the last known CtxTokens when this assistant line has no Usage
+		// block. A partial write mid-session, a tool-only turn, or a schema
+		// drift would otherwise zero the cell even though the previous
+		// assistant turn recorded a real value a few lines up. A later
+		// assistant line with Usage still overwrites the cell.
+		if u := l.Message.Usage; u != nil {
+			s.CtxTokens = u.Input + u.CacheRead + u.CacheWrite + u.CacheWrite1h
 		}
 	}
 	if txt := piAssistantText(l); txt != "" {

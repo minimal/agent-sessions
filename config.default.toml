@@ -23,6 +23,11 @@ background = false
 # Larger sessions require typing the full word "yes".
 quick_trash_threshold_bytes = 8192
 
+[ctx]
+# Show the current context size reported by supported session sources. Claude
+# transcripts provide this usage data; sources without it render a blank cell.
+enabled = true
+
 [styles.running]   # sessions whose turn is in progress
 fg = "10"
 bold = true

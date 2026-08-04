@@ -29,23 +29,24 @@ var sessionStates = []SessionState{StateRunning, StateWaiting, StateIdle}
 // source. Source identifies the adapter that produced it; the rest is generic.
 // Fields an adapter can't fill (e.g. pi has no Slug, and no live PID) stay zero.
 type Session struct {
-	ID       string
-	File     string
-	CWD      string
-	Branch   string
-	Model    string
-	Repo     string // git common dir shared by a repo's worktrees; "" if none
-	Slug     string
-	Title    string
-	LastMsg  string    // most recent assistant text, collapsed to one line
-	Modified time.Time // transcript file mtime
-	Activity time.Time // timestamp of the last real entry; drives sort order
-	Size     int64
-	State    SessionState // empty unless Live
-	PID      int          // the running agent process; 0 unless Live
-	Pane     string       // session:window.pane hosting the process, if any
-	Worktree bool         // true if CWD is a linked git worktree (not the main repo)
-	Source   string       // which adapter produced this ("claude", "pi", ...)
+	ID        string
+	File      string
+	CWD       string
+	Branch    string
+	Model     string
+	Repo      string // git common dir shared by a repo's worktrees; "" if none
+	Slug      string
+	Title     string
+	LastMsg   string    // most recent assistant text, collapsed to one line
+	CtxTokens int       // current context size reported by the source; 0 if unavailable
+	Modified  time.Time // transcript file mtime
+	Activity  time.Time // timestamp of the last real entry; drives sort order
+	Size      int64
+	State     SessionState // empty unless Live
+	PID       int          // the running agent process; 0 unless Live
+	Pane      string       // session:window.pane hosting the process, if any
+	Worktree  bool         // true if CWD is a linked git worktree (not the main repo)
+	Source    string       // which adapter produced this ("claude", "pi", ...)
 }
 
 // When is the time shown for the session: its last real activity, falling

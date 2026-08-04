@@ -28,6 +28,14 @@ type transcriptMessage struct {
 	Role    string          `json:"role"`
 	Content json.RawMessage `json:"content"`
 	Model   string          `json:"model"`
+	Usage   *Usage          `json:"usage"`
+}
+
+type Usage struct {
+	InputTokens              int `json:"input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
 }
 
 type transcriptLine struct {
@@ -199,8 +207,18 @@ func absorb(s *Session, l transcriptLine) {
 	if l.Slug != "" {
 		s.Slug = l.Slug
 	}
-	if l.Type == "assistant" && l.Message != nil && l.Message.Role == "assistant" && l.Message.Model != "" {
-		s.Model = l.Message.Model
+	if l.Type == "assistant" && l.Message != nil && l.Message.Role == "assistant" {
+		if l.Message.Model != "" {
+			s.Model = l.Message.Model
+		}
+		// Keep the last known CtxTokens when this assistant line has no Usage
+		// block. A partial write mid-session, a tool-only turn, or a schema
+		// drift would otherwise zero the cell even though the previous
+		// assistant turn recorded a real value a few lines up. A later
+		// assistant line with Usage still overwrites the cell.
+		if u := l.Message.Usage; u != nil {
+			s.CtxTokens = u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens
+		}
 	}
 	if txt := assistantText(l); txt != "" {
 		s.LastMsg = txt

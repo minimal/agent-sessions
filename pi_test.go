@@ -266,3 +266,83 @@ func TestPiLiveMarkerISO8601Timestamp(t *testing.T) {
 		t.Errorf("parsed UpdatedAt = %v", m.UpdatedAt)
 	}
 }
+
+func TestPiContextTokensUseLatestAssistantEntry(t *testing.T) {
+	// Mirrors TestClaudeContextTokensUseLatestAssistantEntry for the pi schema:
+	// the context-window-occupancy total is input + cacheRead + cacheWrite +
+	// cacheWrite1h, NOT input + cache* + output. A later assistant line with
+	// usage overwrites; a usage-less assistant line keeps the prior value so
+	// tool-only turns and partial writes don't blank the cell.
+	var s Session
+
+	absorbPi(&s, piLine{
+		Type: "message",
+		Message: &piMessage{
+			Role: "assistant",
+			Usage: &piUsage{
+				Input: 1000, CacheRead: 2000, CacheWrite: 3000, CacheWrite1h: 500,
+				Output: 9000,
+			},
+		},
+	})
+	if s.CtxTokens != 6500 {
+		t.Fatalf("context tokens = %d, want 6500 (input + cache* + cacheWrite1h, NOT output)", s.CtxTokens)
+	}
+
+	absorbPi(&s, piLine{
+		Type: "message",
+		Message: &piMessage{
+			Role: "assistant",
+			Usage: &piUsage{
+				Input: 4000, CacheRead: 5000, CacheWrite: 6000, CacheWrite1h: 0,
+				Output: 7000,
+			},
+		},
+	})
+	if s.CtxTokens != 15000 {
+		t.Errorf("context tokens = %d, want latest assistant entry's 15000", s.CtxTokens)
+	}
+
+	absorbPi(&s, piLine{
+		Type:    "message",
+		Message: &piMessage{Role: "assistant"},
+	})
+	if s.CtxTokens != 15000 {
+		t.Errorf("assistant entry without usage should keep the prior context tokens, got %d, want 15000", s.CtxTokens)
+	}
+}
+
+func TestPiContextTokensFromJSONL(t *testing.T) {
+	// End-to-end exercise of the head/tail scan: a tiny transcript with two
+	// assistant messages — one with usage, one without — should leave the
+	// session with CtxTokens from the first (and keep it through the
+	// usage-less one), matching the same fail-open behavior the column
+	// relies on.
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "session.jsonl")
+	lines := []string{
+		`{"type":"session","id":"sess-1","cwd":"/tmp","name":"ctx test"}`,
+		`{"type":"message","timestamp":"2026-08-04T10:00:00Z","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}`,
+		`{"type":"message","timestamp":"2026-08-04T10:00:05Z","message":{"role":"assistant","content":[{"type":"text","text":"hello"}],"model":"claude-opus-4.8","usage":{"input":1000,"output":9000,"cacheRead":2000,"cacheWrite":3000,"cacheWrite1h":500}}}`,
+		`{"type":"message","timestamp":"2026-08-04T10:00:10Z","message":{"role":"assistant","content":[{"type":"text","text":"again"}]}}`,
+	}
+	content := ""
+	for _, l := range lines {
+		content += l + "\n"
+	}
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := parsePi(path, info)
+	if s.ID != "sess-1" {
+		t.Errorf("ID = %q, want sess-1", s.ID)
+	}
+	if s.CtxTokens != 6500 {
+		t.Errorf("CtxTokens = %d, want 6500 from the only usage-bearing line", s.CtxTokens)
+	}
+}
