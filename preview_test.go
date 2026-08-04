@@ -110,8 +110,8 @@ func TestClaudeContextTokensUseLatestAssistantEntry(t *testing.T) {
 		Type:    "assistant",
 		Message: &transcriptMessage{Role: "assistant"},
 	})
-	if s.CtxTokens != 0 {
-		t.Errorf("assistant entry without usage should clear stale context tokens, got %d", s.CtxTokens)
+	if s.CtxTokens != 15000 {
+		t.Errorf("assistant entry without usage should keep the prior context tokens, got %d, want 15000", s.CtxTokens)
 	}
 }
 
