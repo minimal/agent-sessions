@@ -1774,17 +1774,12 @@ func ctxCell(s Session) (text string, style lipgloss.Style) {
 	if s.CtxTokens <= 0 {
 		return "", style
 	}
-
+	// Round to nearest k, cap at 999 (compaction kicks in way before 1M).
 	roundedK := (s.CtxTokens + 500) / 1000
-	if roundedK < 1000 {
-		return fmt.Sprintf("%dk", roundedK), style
+	if roundedK > 999 {
+		roundedK = 999
 	}
-
-	tenths := (s.CtxTokens + 50_000) / 100_000
-	if tenths%10 == 0 {
-		return fmt.Sprintf("%dM", tenths/10), style
-	}
-	return fmt.Sprintf("%d.%dM", tenths/10, tenths%10), style
+	return fmt.Sprintf("%dk", roundedK), style
 }
 
 // overlay layers the set attributes of ov onto base (ov wins), used to apply a

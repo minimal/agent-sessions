@@ -121,30 +121,15 @@ func TestCtxCell(t *testing.T) {
 		want   string
 	}{
 		{0, ""},
-		// Sub-1k tokens collapse to "0k" — ctx cells are too narrow to show
-		// any meaningful per-hundred resolution.
 		{1, "0k"},
 		{499, "0k"},
 		{500, "1k"},
 		{152_000, "152k"},
-		{152_500, "153k"},
-		// Last k-rendered value before the k/M switch: 999_499 rounds to
-		// 999k, the very next token (999_500) becomes 1M.
+		{152_500, "153k"}, // round-half-up
 		{999_499, "999k"},
-		{999_500, "1M"},
-		{1_050_000, "1.1M"},
-		{1_200_000, "1.2M"},
-		{1_250_000, "1.3M"},
-		// colCtx=5 truncation edge: 999M is the last value whose cell output
-		// (4 chars) fits with 1 char of padding, and 1000M (5 chars) is the
-		// last that fits without an ellipsis. 999.5M and 999.9M both render
-		// 6 chars and are truncated by the renderer (verified by
-		// TestCtxColumnRendersAt5Chars).
-		{999_000_000, "999M"},
-		{999_500_000, "999.5M"},
-		{999_900_000, "999.9M"},
-		{1_000_000_000, "1000M"},
-		{9_999_500_000, "9999.5M"},
+		{999_500, "999k"},
+		{1_000_000, "999k"},   // cap kicks in
+		{9_999_500_000, "999k"},
 	}
 	for _, c := range cases {
 		got, _ := ctxCell(Session{CtxTokens: c.tokens})
@@ -155,42 +140,24 @@ func TestCtxCell(t *testing.T) {
 }
 
 func TestCtxColumnRendersAt5Chars(t *testing.T) {
-	// The ctx column is colCtx=5 wide. Verify that the cell output fits
-	// without an ellipsis through the realistic range and that values past
-	// the ceiling get truncated by the renderer's truncPad. The 999.9M /
-	// 9999.5M cases exceed 5 chars and exercise the truncation path; 1000M
-	// is the last value whose raw cell output exactly fills the column.
+	// With the 999k cap, every cell value is 0-4 chars and never needs
+	// truncPad. Pin that here so any future M/G/T re-introduction has to
+	// widen the column or accept truncation.
 	for _, c := range []struct {
 		tokens   int
 		maxChars int
 	}{
-		{152_000, 5},        // "152k"
-		{999_500, 5},        // "1M"
-		{1_050_000, 5},      // "1.1M"
-		{999_000_000, 5},    // "999M" (4 chars, 1 char padding)
-		{1_000_000_000, 5},  // "1000M" (exact 5-char fit)
-		{999_500_000, 6},    // "999.5M" (6 chars — truncPad adds …)
-		{999_900_000, 6},    // "999.9M" (6 chars — truncPad adds …)
-		{9_999_500_000, 7},  // "9999.5M" (7 chars — truncPad adds …)
+		{0, 0},
+		{1, 2},
+		{152_000, 4},
+		{999_499, 4},
+		{1_000_000, 4},
+		{9_999_500_000, 4},
 	} {
 		got, _ := ctxCell(Session{CtxTokens: c.tokens})
 		if w := lipgloss.Width(got); w > c.maxChars {
 			t.Errorf("ctxCell(%d) = %q width %d, want <= %d", c.tokens, got, w, c.maxChars)
 		}
-	}
-
-	// And the cell that's just past the ceiling does get truncated by the
-	// renderer to colCtx=5 with the ellipsis suffix, so the column stays
-	// aligned even at 5-digit-M values.
-	sessions := []Session{
-		{ID: "a", Title: "one", CtxTokens: 9_999_500_000, Modified: time.Now()},
-	}
-	m := testModel(previewRow, sessions)
-	m.width = 1000
-	m.showCtx = true
-	row := m.renderRow(0, false, lipgloss.NewStyle(), false)
-	if !strings.Contains(row, "…") {
-		t.Errorf("10B+ ctx cell should be truncated with an ellipsis, got:\n%s", row)
 	}
 }
 
