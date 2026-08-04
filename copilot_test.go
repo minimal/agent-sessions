@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -523,5 +524,210 @@ func TestParseCopilotMarkerStatus(t *testing.T) {
 		if got := parseCopilotMarkerStatus(in); got != want {
 			t.Errorf("parseCopilotMarkerStatus(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestCopilotContextTokensMemoizesByDBMtime(t *testing.T) {
+	// Regression: a refresh between Copilot writes (DB mtime unchanged) must
+	// skip the sqlite open + schema probe + query and return the prior result.
+	// The cache only invalidates when the mtime moves forward, so a fake write
+	// hidden by a stale mtime stays hidden until Chtimes forces a re-read.
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "session-state")
+	writeCopilotSession(t, root, "session-a", []string{
+		`{"type":"session.start","timestamp":"2026-07-02T15:03:27.361Z","data":{"sessionId":"session-a","context":{"cwd":"/tmp"}}}`,
+	}, "")
+
+	usageDB := filepath.Join(tmp, "session-store.db")
+	writeCopilotUsageDB(t, usageDB, []copilotUsageRow{
+		{sessionID: "session-a", inputTokens: 100, outputTokens: 10},
+	})
+	// Pin the mtime to a known instant so the test can compare equal across
+	// the intermediate write below.
+	pinned := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(usageDB, pinned, pinned); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := newCopilotAdapter(root)
+	adapter.usageDB = usageDB
+	sessions, err := adapter.Sessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].CtxTokens != 100 {
+		t.Fatalf("first read: CtxTokens = %d, want 100", sessions[0].CtxTokens)
+	}
+
+	// Append a new row, then restore the mtime so the cache hit path is
+	// exercised. A real Copilot commit would advance the mtime and force
+	// the re-read; this simulates a write that the kernel reports with a
+	// coarser timestamp than the cache key — the cache must still hold.
+	db, err := sql.Open("sqlite", usageDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO assistant_usage_events (session_id, input_tokens) VALUES (?, ?)`, "session-a", 999); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(usageDB, pinned, pinned); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second refresh without an mtime bump: cache hits, the new row is hidden.
+	sessions, err = adapter.Sessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].CtxTokens != 100 {
+		t.Errorf("cached refresh: CtxTokens = %d, want 100 (cache must hide the new row)", sessions[0].CtxTokens)
+	}
+
+	// Bump the mtime and refresh: the new row is the latest and wins.
+	later := pinned.Add(time.Hour)
+	if err := os.Chtimes(usageDB, later, later); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err = adapter.Sessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].CtxTokens != 999 {
+		t.Errorf("post-mtime refresh: CtxTokens = %d, want 999 (new row must be visible)", sessions[0].CtxTokens)
+	}
+}
+
+func TestCopilotContextTokensChunksLargeSessionList(t *testing.T) {
+	// Regression: a single IN(?) query with len(sessions) bind vars blows
+	// past SQLite's default SQLITE_MAX_VARIABLE_NUMBER (999) and blanks the
+	// ctx column on machines with many Copilot sessions. The fix chunks at
+	// 500; verify the latest row per session comes back correctly across
+	// multiple chunks by creating more sessions than the chunk size.
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "session-state")
+
+	const n = 1500
+	rows := make([]copilotUsageRow, 0, n)
+	for i := 0; i < n; i++ {
+		sid := fmt.Sprintf("session-%04d", i)
+		writeCopilotSession(t, root, sid, []string{
+			`{"type":"session.start","timestamp":"2026-07-02T15:03:27.361Z","data":{"sessionId":"` + sid + `","context":{"cwd":"/tmp"}}}`,
+		}, "")
+		rows = append(rows, copilotUsageRow{sessionID: sid, inputTokens: i * 10, outputTokens: 0})
+	}
+
+	usageDB := filepath.Join(tmp, "session-store.db")
+	writeCopilotUsageDB(t, usageDB, rows)
+
+	adapter := newCopilotAdapter(root)
+	adapter.usageDB = usageDB
+	sessions, err := adapter.Sessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != n {
+		t.Fatalf("got %d sessions, want %d", len(sessions), n)
+	}
+	tokensByID := make(map[string]int, len(sessions))
+	for _, s := range sessions {
+		tokensByID[s.ID] = s.CtxTokens
+	}
+	// Spot-check across the first, middle, and last chunks so a chunked query
+	// that drops IDs or returns the wrong row would fail somewhere obvious.
+	for _, i := range []int{0, 1, 499, 500, 999, 1000, 1499} {
+		sid := fmt.Sprintf("session-%04d", i)
+		want := i * 10
+		if got := tokensByID[sid]; got != want {
+			t.Errorf("%s CtxTokens = %d, want %d", sid, got, want)
+		}
+	}
+}
+
+func TestCopilotContextTokensFailsOpenOnSchemaDrift(t *testing.T) {
+	// Regression: a usage DB whose assistant_usage_events table lacks the
+	// agent_id column (a future Copilot schema change, a manual experiment,
+	// or a third-party tool) must not blank the entire session list. The
+	// sqlite_master probe succeeds, the hard-coded query fails with "no such
+	// column: agent_id", and the session must still load with CtxTokens=0.
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "session-state")
+	writeCopilotSession(t, root, "session-a", []string{
+		`{"type":"session.start","timestamp":"2026-07-02T15:03:27.361Z","data":{"sessionId":"session-a","context":{"cwd":"/tmp"}}}`,
+	}, "")
+
+	usageDB := filepath.Join(tmp, "session-store.db")
+	db, err := sql.Open("sqlite", usageDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Same table name, missing column the query depends on. Keep session_id
+	// and input_tokens so the schema probe passes but the query fails on a
+	// real column reference, not on the table itself.
+	if _, err := db.Exec(`
+		CREATE TABLE assistant_usage_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			input_tokens INTEGER
+		)
+	`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO assistant_usage_events (session_id, input_tokens) VALUES (?, ?)`, "session-a", 500); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := newCopilotAdapter(root)
+	adapter.usageDB = usageDB
+	sessions, err := adapter.Sessions()
+	if err != nil {
+		t.Fatalf("Sessions() should fail open on a schema-drift usage DB, got %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("got %d sessions, want 1", len(sessions))
+	}
+	if sessions[0].CtxTokens != 0 {
+		t.Errorf("CtxTokens = %d, want 0 (schema drift must blank the ctx column, not the session list)", sessions[0].CtxTokens)
+	}
+}
+
+func TestCopilotContextTokensFailsOpenWhenDBUnusable(t *testing.T) {
+	// Regression: a usage DB path that exists but is unusable (e.g. replaced
+	// by a directory, on read-only media, or held by another writer in a way
+	// SQLite can't share) must not blank the session list. This is the third
+	// leg of the fail-open guarantee alongside the missing-file and missing-
+	// table tests. A directory at the DB path is the most portable way to
+	// exercise the "stat succeeds but the DB is unreadable" branch (chmod
+	// 000 is Unix-only and would also skip the os.Stat cache check).
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "session-state")
+	writeCopilotSession(t, root, "session-a", []string{
+		`{"type":"session.start","timestamp":"2026-07-02T15:03:27.361Z","data":{"sessionId":"session-a","context":{"cwd":"/tmp"}}}`,
+	}, "")
+
+	usageDB := filepath.Join(tmp, "session-store.db")
+	if err := os.Mkdir(usageDB, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := newCopilotAdapter(root)
+	adapter.usageDB = usageDB
+	sessions, err := adapter.Sessions()
+	if err != nil {
+		t.Fatalf("Sessions() should fail open when the usage DB is unreadable, got %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("got %d sessions, want 1", len(sessions))
+	}
+	if sessions[0].CtxTokens != 0 {
+		t.Errorf("CtxTokens = %d, want 0 (unreadable DB must blank the ctx column, not the session list)", sessions[0].CtxTokens)
 	}
 }
