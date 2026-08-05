@@ -74,6 +74,10 @@ type Config struct {
 		Unread  string `toml:"unread"`
 		Offline string `toml:"offline"`
 		Words   bool   `toml:"words"` // show the state word next to the glyph
+		Timer   struct {
+			Mode  string `toml:"mode"`  // "replace", "append", or "replace-after"
+			After string `toml:"after"` // threshold used by "replace-after"
+		} `toml:"timer"`
 	} `toml:"status"`
 	Preview struct {
 		Mode   string `toml:"mode"`   // "row", "column", or "off"
@@ -195,6 +199,47 @@ func (c Config) PreviewWithin() time.Duration {
 	return 20 * time.Minute
 }
 
+type runningTimerMode string
+
+const (
+	timerReplace      runningTimerMode = "replace"
+	timerAppend       runningTimerMode = "append"
+	timerReplaceAfter runningTimerMode = "replace-after"
+)
+
+type runningTimerConfig struct {
+	mode  runningTimerMode
+	after time.Duration
+}
+
+func parseRunningTimerConfig(mode, after string) (runningTimerConfig, error) {
+	cfg := runningTimerConfig{mode: runningTimerMode(mode)}
+	switch cfg.mode {
+	case timerReplace, timerAppend, timerReplaceAfter:
+	default:
+		return cfg, fmt.Errorf("status.timer.mode: %q must be replace, append, or replace-after", mode)
+	}
+	d, err := time.ParseDuration(after)
+	if err != nil {
+		return cfg, fmt.Errorf("status.timer.after: %q is not a valid duration: %w", after, err)
+	}
+	if d < 0 {
+		return cfg, fmt.Errorf("status.timer.after: %q must not be negative", after)
+	}
+	cfg.after = d
+	return cfg, nil
+}
+
+func (c Config) runningTimer() runningTimerConfig {
+	cfg, _ := parseRunningTimerConfig(c.Status.Timer.Mode, c.Status.Timer.After)
+	return cfg
+}
+
+func (c Config) validate() error {
+	_, err := parseRunningTimerConfig(c.Status.Timer.Mode, c.Status.Timer.After)
+	return err
+}
+
 // StyleConfig describes one visual element of the UI.
 type StyleConfig struct {
 	Fg      string `toml:"fg"`
@@ -249,6 +294,9 @@ func loadConfig() (Config, error) {
 	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
 		return cfg, fmt.Errorf("built-in default config: %w", err)
 	}
+	if err := cfg.validate(); err != nil {
+		return cfg, fmt.Errorf("built-in default config: %w", err)
+	}
 	path, err := configPath()
 	if err != nil {
 		return cfg, nil // no config dir on this system; run with defaults
@@ -277,6 +325,9 @@ func loadConfig() (Config, error) {
 		if _, ok := cfg.Commands[k]; !ok {
 			cfg.Commands[k] = v
 		}
+	}
+	if err := cfg.validate(); err != nil {
+		return cfg, fmt.Errorf("%s: %w", path, err)
 	}
 	return cfg, nil
 }
