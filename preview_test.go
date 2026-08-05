@@ -29,6 +29,8 @@ func testModel(mode previewMode, sessions []Session) model {
 		previewRecent: 5,
 		previewWithin: 20 * time.Minute,
 		showWords:     true,
+		runningTimer:  cfg.runningTimer(),
+		runningSince:  map[sessionKey]time.Time{},
 		colCfg:        cfg.Columns,
 		sessions:      sessions,
 		width:         160,
@@ -128,7 +130,7 @@ func TestCtxCell(t *testing.T) {
 		{152_500, "153k"}, // round-half-up
 		{999_499, "999k"},
 		{999_500, "999k"},
-		{1_000_000, "999k"},   // cap kicks in
+		{1_000_000, "999k"}, // cap kicks in
 		{9_999_500_000, "999k"},
 	}
 	for _, c := range cases {
@@ -198,6 +200,142 @@ func TestDefaultConfigEnablesCtxColumn(t *testing.T) {
 	}
 	if !newModel(cfg).showCtx {
 		t.Error("newModel should carry [ctx].enabled into the row renderer")
+	}
+}
+
+func TestRunningTimerConfig(t *testing.T) {
+	var cfg Config
+	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	timer := cfg.runningTimer()
+	if timer.mode != timerReplaceAfter || timer.after != time.Minute {
+		t.Fatalf("default timer = {%q, %v}, want {replace-after, 1m}", timer.mode, timer.after)
+	}
+	if _, err := toml.Decode("[status]\nwords = false\n", &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if timer := cfg.runningTimer(); timer.mode != timerReplaceAfter || timer.after != time.Minute {
+		t.Errorf("older config overlay erased timer defaults: {%q, %v}", timer.mode, timer.after)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		mode  string
+		after string
+	}{
+		{"bad mode", "sometimes", "1m"},
+		{"bad duration", "replace-after", "soon"},
+		{"negative duration", "replace-after", "-1s"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := parseRunningTimerConfig(tc.mode, tc.after); err == nil {
+				t.Fatalf("parseRunningTimerConfig(%q, %q) succeeded, want error", tc.mode, tc.after)
+			}
+		})
+	}
+}
+
+func TestFormatRunningDuration(t *testing.T) {
+	cases := []struct {
+		elapsed time.Duration
+		want    string
+	}{
+		{0, "0s"},
+		{59 * time.Second, "59s"},
+		{time.Minute, "1m"},
+		{time.Minute + 2*time.Second, "1m 2s"},
+		{59*time.Minute + 59*time.Second, "59m 59s"},
+		{time.Hour, "1h 00m"},
+		{time.Hour + 4*time.Minute + 59*time.Second, "1h 04m"},
+	}
+	for _, tc := range cases {
+		if got := formatRunningDuration(tc.elapsed); got != tc.want {
+			t.Errorf("formatRunningDuration(%v) = %q, want %q", tc.elapsed, got, tc.want)
+		}
+	}
+}
+
+func TestObserveRunningTransitions(t *testing.T) {
+	now := time.Date(2026, 8, 5, 18, 0, 0, 0, time.UTC)
+	m := model{
+		runningSince: map[sessionKey]time.Time{},
+		now:          func() time.Time { return now },
+	}
+	claude := Session{ID: "same", Source: "claude", PID: 1, State: StateRunning}
+	pi := Session{ID: "same", Source: "pi", PID: 2, State: StateRunning}
+
+	m.observeRunning([]Session{claude, pi})
+	if len(m.runningSince) != 2 {
+		t.Fatalf("same ID from two sources produced %d timers, want 2", len(m.runningSince))
+	}
+	claudeStart := m.runningSince[keyForSession(claude)]
+
+	now = now.Add(10 * time.Second)
+	m.observeRunning([]Session{
+		claude,
+		{ID: "same", Source: "pi", PID: 2, State: StateWaiting},
+	})
+	if got := m.runningSince[keyForSession(claude)]; !got.Equal(claudeStart) {
+		t.Errorf("continuing run restarted at %v, want %v", got, claudeStart)
+	}
+	if _, ok := m.runningSince[keyForSession(pi)]; ok {
+		t.Error("leaving running should clear the timer")
+	}
+
+	now = now.Add(5 * time.Second)
+	m.observeRunning([]Session{claude, pi})
+	if got := m.runningSince[keyForSession(pi)]; !got.Equal(now) {
+		t.Errorf("re-entering running started at %v, want %v", got, now)
+	}
+
+	m.observeRunning(nil)
+	if len(m.runningSince) != 0 {
+		t.Errorf("disappearing sessions left %d timers, want 0", len(m.runningSince))
+	}
+}
+
+func TestRunningTimerModesAndAlignment(t *testing.T) {
+	start := time.Date(2026, 8, 5, 18, 0, 0, 0, time.UTC)
+	now := start.Add(83 * time.Second)
+	running := Session{ID: "run", Source: "claude", PID: 1, State: StateRunning}
+	waiting := Session{ID: "wait", Source: "pi", PID: 2, State: StateWaiting}
+
+	for _, tc := range []struct {
+		mode runningTimerMode
+		want string
+	}{
+		{timerReplace, "1m 23s"},
+		{timerAppend, "running 1m 23s"},
+		{timerReplaceAfter, "1m 23s"},
+	} {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			m := model{
+				runningTimer: runningTimerConfig{mode: tc.mode, after: time.Minute},
+				runningSince: map[sessionKey]time.Time{keyForSession(running): start},
+				now:          func() time.Time { return now },
+			}
+			if got := strings.TrimSpace(m.stateCell(running)); got != tc.want {
+				t.Errorf("stateCell(running) = %q, want %q", got, tc.want)
+			}
+			if lipgloss.Width(m.stateCell(running)) != lipgloss.Width(m.stateCell(waiting)) {
+				t.Errorf("running and waiting state cells should stay aligned: %q vs %q",
+					m.stateCell(running), m.stateCell(waiting))
+			}
+		})
+	}
+
+	m := model{
+		runningTimer: runningTimerConfig{mode: timerReplaceAfter, after: time.Minute},
+		runningSince: map[sessionKey]time.Time{keyForSession(running): start},
+		now:          func() time.Time { return start.Add(time.Minute) },
+	}
+	if got := strings.TrimSpace(m.stateCell(running)); got != "1m" {
+		t.Errorf("replace-after at threshold = %q, want 1m", got)
+	}
+	m.now = func() time.Time { return start.Add(59 * time.Second) }
+	if got := strings.TrimSpace(m.stateCell(running)); got != "running" {
+		t.Errorf("replace-after below threshold = %q, want running", got)
 	}
 }
 
@@ -689,20 +827,25 @@ func glyphModel() model {
 
 func TestIconOnlyMode(t *testing.T) {
 	m := glyphModel()
-	m.sessions = []Session{{ID: "a", Title: "x", PID: 1, State: StateIdle, Modified: time.Now()}}
+	start := time.Date(2026, 8, 5, 18, 0, 0, 0, time.UTC)
+	running := Session{ID: "a", Title: "x", PID: 1, State: StateRunning, Modified: start}
+	m.sessions = []Session{running}
+	m.runningTimer = runningTimerConfig{mode: timerReplace}
+	m.runningSince = map[sessionKey]time.Time{keyForSession(running): start}
+	m.now = func() time.Time { return start.Add(time.Minute) }
 
 	withWords := m.View()
-	if !strings.Contains(withWords, "idle") {
-		t.Fatalf("expected state word with showWords=true, got:\n%s", withWords)
+	if !strings.Contains(withWords, "1m") {
+		t.Fatalf("expected timer with showWords=true, got:\n%s", withWords)
 	}
 
 	m.showWords = false
 	iconOnly := m.View()
-	if strings.Contains(iconOnly, "idle") {
-		t.Errorf("state word should be hidden with showWords=false, got:\n%s", iconOnly)
+	if strings.Contains(iconOnly, "1m") || strings.Contains(iconOnly, "running") {
+		t.Errorf("state word and timer should be hidden with showWords=false, got:\n%s", iconOnly)
 	}
 	// The glyph still shows.
-	if !strings.Contains(iconOnly, "·") {
+	if !strings.Contains(iconOnly, spinnerFrames[0]) {
 		t.Errorf("glyph should still render in icon-only mode, got:\n%s", iconOnly)
 	}
 }

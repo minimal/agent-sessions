@@ -25,6 +25,101 @@ func newLineInput() textinput.Model {
 	return ti
 }
 
+type sessionKey struct {
+	source string
+	id     string
+}
+
+func keyForSession(s Session) sessionKey {
+	return sessionKey{source: s.Source, id: s.ID}
+}
+
+func (m model) currentTime() time.Time {
+	if m.now != nil {
+		return m.now()
+	}
+	return time.Now()
+}
+
+// observeRunning records the first refresh where each session is seen in the
+// running state. Leaving running or disappearing drops the timestamp, so a
+// later running interval starts over at zero.
+func (m *model) observeRunning(sessions []Session) {
+	if m.runningSince == nil {
+		m.runningSince = map[sessionKey]time.Time{}
+	}
+	running := make(map[sessionKey]bool, len(sessions))
+	now := m.currentTime()
+	for _, s := range sessions {
+		if !s.Live() || s.State != StateRunning {
+			continue
+		}
+		key := keyForSession(s)
+		running[key] = true
+		if _, ok := m.runningSince[key]; !ok {
+			m.runningSince[key] = now
+		}
+	}
+	for key := range m.runningSince {
+		if !running[key] {
+			delete(m.runningSince, key)
+		}
+	}
+}
+
+func formatRunningDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	d = d.Truncate(time.Second)
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", d/time.Second)
+	}
+	if d < time.Hour {
+		minutes := d / time.Minute
+		seconds := d % time.Minute / time.Second
+		if seconds == 0 {
+			return fmt.Sprintf("%dm", minutes)
+		}
+		return fmt.Sprintf("%dm %ds", minutes, seconds)
+	}
+	hours := d / time.Hour
+	if hours > 9999 {
+		return "9999h+"
+	}
+	minutes := d % time.Hour / time.Minute
+	return fmt.Sprintf("%dh %02dm", hours, minutes)
+}
+
+func (m model) stateCell(s Session) string {
+	width := colState
+	switch m.runningTimer.mode {
+	case timerAppend:
+		width = colState + 1 + colRunningDuration
+	case timerReplace, timerReplaceAfter:
+		width = max(colState, colRunningDuration)
+	}
+
+	label := string(s.State)
+	if s.Live() && s.State == StateRunning {
+		if started, ok := m.runningSince[keyForSession(s)]; ok {
+			elapsed := m.currentTime().Sub(started)
+			timer := formatRunningDuration(elapsed)
+			switch m.runningTimer.mode {
+			case timerReplace:
+				label = timer
+			case timerAppend:
+				label += " " + timer
+			case timerReplaceAfter:
+				if elapsed >= m.runningTimer.after {
+					label = timer
+				}
+			}
+		}
+	}
+	return " " + fmt.Sprintf("%-*s", width, label)
+}
+
 const refreshEvery = 2 * time.Second
 
 // doubleClickWithin is the window in which a second left click on the same
@@ -45,7 +140,8 @@ const (
 	colCtx = 5
 )
 
-// colState fits every state word the index can show.
+// colState fits every state word the index can show. colRunningDuration fits
+// compact elapsed values through 9999 hours; longer runs render as "9999h+".
 var colState = func() int {
 	w := len(StateUnknown)
 	for _, st := range sessionStates {
@@ -53,6 +149,8 @@ var colState = func() int {
 	}
 	return w
 }()
+
+const colRunningDuration = len("9999h 59m")
 
 // widths holds the per-column visual widths computed for the current
 // session set. dir/branch/model/pane are used in every mode; titleCap caps the
@@ -184,8 +282,11 @@ type model struct {
 	searching      bool                    // the search prompt is open and capturing keys
 	unread         map[string]bool         // session IDs that finished a turn unseen
 	seen           map[string]SessionState // last observed live state, for transitions
-	spin           int                     // running-spinner frame index
-	spinning       bool                    // a spinner tick is scheduled
+	runningTimer   runningTimerConfig
+	runningSince   map[sessionKey]time.Time // first observation of the current running interval
+	now            func() time.Time         // replaceable clock for elapsed-time tests
+	spin           int                      // running-spinner frame index
+	spinning       bool                     // a spinner tick is scheduled
 	showHelp       bool
 	helpOffset     int // scroll position within the help screen
 	deleting       *trashConfirmation
@@ -309,6 +410,9 @@ func newModel(cfg Config) model {
 		ciPending:      map[string]time.Time{},
 		unread:         map[string]bool{},
 		seen:           map[string]SessionState{},
+		runningTimer:   cfg.runningTimer(),
+		runningSince:   map[sessionKey]time.Time{},
+		now:            time.Now,
 		switchOnClick:  cfg.Mouse.ClickAction == "select-switch",
 		lastClickRow:   -1,
 		loading:        true,
@@ -700,6 +804,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Error: " + msg.err.Error()
 			return m, nil
 		}
+		m.observeRunning(msg.sessions)
 		m.detectUnread(msg.sessions)
 		m.all = msg.sessions
 		m.applyFilter()
@@ -1618,12 +1723,11 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 	b.WriteString(gap(1))
 	b.WriteString(statusSeg(m.styleFor(mk), mk, m.statusCell(mk)))
 	if m.showWords {
-		w := " " + fmt.Sprintf("%-*s", colState, string(s.State))
 		st := lipgloss.NewStyle()
 		if ws, ok := m.styles.state[s.State]; ok && s.Live() {
 			st = ws
 		}
-		b.WriteString(statusSeg(st, wordMarker(s.State), w))
+		b.WriteString(statusSeg(st, wordMarker(s.State), m.stateCell(s)))
 	}
 	b.WriteString(seg(m.agentStyles[s.Source], m.agentCell(s)))
 	b.WriteString(seg(lipgloss.NewStyle(), m.tmuxCell(s)))

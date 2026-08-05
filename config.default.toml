@@ -204,8 +204,16 @@ idle    = "·"
 unread  = ""
 offline = " "
 # Show the state word (running/waiting/idle) next to the glyph. Set false for
-# a compact, icon-only column.
+# a compact, icon-only column. This also hides the running timer.
 words = true
+
+[status.timer]
+# How elapsed running-state time replaces or accompanies the "running" word:
+#   "replace"       show the timer immediately
+#   "append"        show "running 1m 23s"
+#   "replace-after" keep "running" until `after`, then show the timer
+mode = "replace-after"
+after = "1m"
 
 [preview]
 # How to show each session's last assistant message. mode is "row" (a
