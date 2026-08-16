@@ -189,9 +189,16 @@ func byRecency(a, b Session) bool {
 	return a.Modified.After(b.Modified)
 }
 
+// groupRecencyBucket is the granularity at which a group's recency is compared
+// when ordering groups: a new message a few seconds newer must not reshuffle
+// the groups on every refresh, only activity a whole bucket newer does.
+const groupRecencyBucket = time.Minute
+
 // rankRepos assigns each repo a sort position: repos holding a live session
 // first, then by their most recent activity, with the key breaking ties so the
-// order is stable across loads.
+// order is stable across loads. Recency is compared at groupRecencyBucket
+// granularity, so groups whose newest activity falls in the same minute keep
+// alphabetical order.
 func rankRepos(sessions []Session) map[string]int {
 	type agg struct {
 		hasLive bool
@@ -205,7 +212,7 @@ func rankRepos(sessions []Session) map[string]int {
 			m[s.Repo] = a
 		}
 		a.hasLive = a.hasLive || s.Live()
-		if w := s.When(); w.After(a.newest) {
+		if w := s.When().Truncate(groupRecencyBucket); w.After(a.newest) {
 			a.newest = w
 		}
 	}

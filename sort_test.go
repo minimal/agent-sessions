@@ -83,6 +83,42 @@ func TestSortActiveThenRepo(t *testing.T) {
 	}
 }
 
+// jitterFixtures models the reported pain: two repos whose newest activity
+// differs only by seconds. Without bucketing, the groups swap on every
+// refresh as messages arrive.
+func TestSortRepoStableWithinBucket(t *testing.T) {
+	s := []Session{
+		{ID: "b-live", Repo: "B", Activity: sortBase.Add(10 * time.Second), Modified: sortBase.Add(10 * time.Second), PID: 1},
+		{ID: "a-live", Repo: "A", Activity: sortBase.Add(50 * time.Second), Modified: sortBase.Add(50 * time.Second), PID: 2},
+	}
+	sortSessions(s, parseSortDims("repo"))
+	// Both groups' activity falls in the same minute, so the order is
+	// alphabetical, not by the 40-second difference in recency.
+	want := []string{"a-live", "b-live"}
+	if got := order(s); !equalStrings(got, want) {
+		t.Errorf("order = %v, want %v (groups must not shuffle within a minute)", got, want)
+	}
+}
+
+// TestSortRepoMixedBuckets mixes a within-minute pair (A, B) with a
+// cross-minute group (C) in one sort. With raw timestamps (the pre-fix
+// behaviour) B would edge out A, so this only passes when both the bucketed
+// recency and the alphabetical tiebreak are in effect.
+func TestSortRepoMixedBuckets(t *testing.T) {
+	s := []Session{
+		{ID: "a", Repo: "A", Activity: sortBase.Add(10 * time.Second), Modified: sortBase.Add(10 * time.Second)},
+		{ID: "b", Repo: "B", Activity: sortBase.Add(50 * time.Second), Modified: sortBase.Add(50 * time.Second)},
+		{ID: "c", Repo: "C", Activity: sortBase.Add(2 * time.Minute), Modified: sortBase.Add(2 * time.Minute)},
+	}
+	sortSessions(s, parseSortDims("repo"))
+	// C's group is a full minute newer, so it comes first. A and B fall in
+	// the same minute, so they keep alphabetical order.
+	want := []string{"c", "a", "b"}
+	if got := order(s); !equalStrings(got, want) {
+		t.Errorf("order = %v, want %v", got, want)
+	}
+}
+
 func TestParseSortDims(t *testing.T) {
 	cases := map[string][]sortDim{
 		"":                nil,
