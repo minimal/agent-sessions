@@ -21,12 +21,12 @@
  *      by cooperating prompting extensions so the user-input window is
  *      visible even though isIdle() stays false while a tool awaits
  *      ctx.ui.confirm/input/select.)
- *   tool_execution_end      -> stop poll, clear stale waiting flag
- *   agent_end      -> status "idle"
- *   session_shutdown -> stop poll, delete marker
+ *   rpiv:ask-user:blocked (pi.events, rpiv-ask-user-question >= 2.6.2):
+ *      subscription below writes "waiting" instantly; askUserBlocked gates
+ *      the poll so a 1.5s tick can't clobber it.
  *
- * Cooperation protocol (for prompting extensions like ask-user-questions
- * or a cloned permissions extension):
+ * Cooperation protocol (for prompting extensions that do NOT emit events,
+ * e.g. pi-claude-permissions or the bundled question.ts example):
  *   const sid = ctx.sessionManager.getSessionId();
  *   const sessionFile = ctx.sessionManager.getSessionFile();
  *   const liveDir = join(sessionFile, "..", "..", "..", "live");
@@ -132,7 +132,9 @@ function removeMarker(ctx: ExtensionContext): void {
 // actively working from one that's blocked on user input. isIdle() alone is
 // not enough: it stays false while a custom tool awaits ctx.ui.confirm/
 // input/select (verified: isIdle()=false during the ask-user-questions
-// prompt). So we cooperate: any prompting extension can create a sidecar
+// prompt). Two mechanisms force "waiting": (1) rpiv's rpiv:ask-user:blocked
+// event sets askUserBlocked (checked first below), and (2) any prompting
+// extension can create a sidecar
 // flag file <liveDir>/<sid>.waiting before showing a prompt, and delete it
 // after the user responds. When the flag is present, the poll forces
 // "waiting" regardless of isIdle(). When it's absent, we fall back to
@@ -143,6 +145,12 @@ let toolCount = 0;
 let pollDelay: ReturnType<typeof setTimeout> | undefined;
 let pollTimer: ReturnType<typeof setInterval> | undefined;
 let pollCtx: ExtensionContext | undefined;
+// Most recent ExtensionContext, cached so the pi.events handler (whose
+// payload carries no ctx/sid) can write markers for the current session.
+let currentCtx: ExtensionContext | undefined;
+// True while a cooperating extension reports a live ask-user prompt
+// (rpiv:ask-user:blocked {active:true}). Gates the poll as described above.
+let askUserBlocked = false;
 
 function waitingFlagPath(ctx: ExtensionContext): string | undefined {
 	const sid = ctx.sessionManager.getSessionId();
@@ -163,6 +171,11 @@ function startPoll(ctx: ExtensionContext): void {
 		pollTimer = setInterval(() => {
 			if (toolCount === 0 || !pollCtx) return;
 			try {
+				if (askUserBlocked) {
+					debug(pollCtx, "poll: ask-user blocked -> waiting");
+					writeMarker(pollCtx, "waiting");
+					return;
+				}
 				const flag = waitingFlagPath(pollCtx);
 				if (flag && existsSync(flag)) {
 					debug(pollCtx, "poll: waiting flag present -> waiting");
@@ -194,10 +207,12 @@ function stopPoll(): void {
 
 export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
+		currentCtx = ctx;
 		writeMarker(ctx, "idle");
 	});
 
 	pi.on("agent_start", async (_event, ctx) => {
+		currentCtx = ctx;
 		writeMarker(ctx, "running");
 	});
 
@@ -211,12 +226,14 @@ export default function (pi: ExtensionAPI) {
 	// tool_execution_start does NOT fire while the prompt is up, and the
 	// marker correctly shows "waiting".
 	pi.on("message_end", async (event, ctx) => {
+		currentCtx = ctx;
 		if (event.message?.role !== "assistant") return;
 		debug(ctx, "message_end (assistant) -> waiting");
 		writeMarker(ctx, "waiting");
 	});
 
 	pi.on("tool_execution_start", async (event, ctx) => {
+		currentCtx = ctx;
 		toolCount++;
 		debug(ctx, `tool_execution_start id=${event.toolCallId} name=${event.toolName} count=${toolCount}`);
 		if (toolCount === 1) {
@@ -226,13 +243,15 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("tool_execution_end", async (event, ctx) => {
+		currentCtx = ctx;
 		debug(ctx, `tool_execution_end id=${event.toolCallId} name=${event.toolName} isError=${event.isError} count=${toolCount}`);
 		toolCount = Math.max(0, toolCount - 1);
 		if (toolCount === 0) {
 			stopPoll();
 			// Defensive: a cooperating extension may have left the flag behind
-			// if it crashed mid-prompt. Clear it so a future tool run doesn't
-			// inherit a stale "waiting".
+			// or crashed without clearing askUserBlocked. Reset both so a
+			// future tool run doesn't inherit a stale "waiting".
+			askUserBlocked = false;
 			const flag = waitingFlagPath(ctx);
 			if (flag) {
 				try { unlinkSync(flag); } catch {}
@@ -241,12 +260,30 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
+		currentCtx = ctx;
 		writeMarker(ctx, "idle");
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		currentCtx = ctx;
 		stopPoll();
 		removeMarker(ctx);
+	});
+
+	// rpiv-ask-user-question >= 2.6.2 emits rpiv:ask-user:blocked on the
+	// shared pi.events bus when its questionnaire is awaiting the user
+	// (and again with active:false in a finally when the wait ends). The
+	// payload carries no ctx/sid, so markers use the cached currentCtx.
+	pi.events.on("rpiv:ask-user:blocked", (payload: { active: boolean }) => {
+		askUserBlocked = payload.active;
+		if (!currentCtx) return;
+		if (payload.active) {
+			debug(currentCtx, "rpiv:ask-user:blocked -> waiting");
+			writeMarker(currentCtx, "waiting");
+		} else if (toolCount > 0) {
+			// Answer received while a tool is still running: resume poll logic.
+			writeMarker(currentCtx, currentCtx.isIdle() ? "waiting" : "running");
+		}
 	});
 
 	pi.registerCommand("pi-live-status", {
@@ -273,7 +310,7 @@ export default function (pi: ExtensionAPI) {
 			})();
 			const flag = waitingFlagPath(ctx);
 			const flagPresent = flag ? existsSync(flag) : false;
-			const msg = `toolCount=${toolCount} pollActive=${pollTimer !== undefined} isIdle()=${idle} waitingFlag=${flagPresent} marker=${present ? "present" : "missing"} lastWritten=${lastWrittenStatus ?? "none"}`;
+			const msg = `toolCount=${toolCount} pollActive=${pollTimer !== undefined} askUserBlocked=${askUserBlocked} isIdle()=${idle} waitingFlag=${flagPresent} marker=${present ? "present" : "missing"} lastWritten=${lastWrittenStatus ?? "none"}`;
 			if (ctx.hasUI) {
 				ctx.ui.notify(msg, "info");
 			}

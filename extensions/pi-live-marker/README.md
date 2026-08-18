@@ -55,6 +55,7 @@ loads TypeScript extensions directly via jiti.
 | `message_end` (assistant) | write | `waiting` |
 | `tool_execution_start` | write    | `running` (+ start poll) |
 | `tool_execution_end`   | (poll stops; stale waiting flag cleared) | |
+| `rpiv:ask-user:blocked` (`active:true`) | write   | `waiting` (instant, gates poll) |
 | `agent_settled`  | write         | `idle`   |
 | `session_shutdown`| delete        | —        |
 
@@ -124,6 +125,23 @@ The path is the marker directory's sibling: `~/.pi/agent/live/`. The flag
 filename is the session uuid with a `.waiting` suffix. `agent-sessions-pi-live`
 also defensively removes the flag when the last `tool_execution_end` fires,
 in case your extension crashes mid-prompt.
+
+### Event-driven cooperation (rpiv-ask-user-question ≥ 2.6.2)
+
+[`@juicesharp/rpiv-ask-user-question`](https://www.npmjs.com/package/@juicesharp/rpiv-ask-user-question)
+≥ 2.6.2 emits `rpiv:ask-user:blocked` (`{active: boolean}`) on pi's shared
+cross-extension event bus (`pi.events`; pi's extensions docs describe it as
+"Shared event bus for communication between extensions"). It fires
+`{active:true}` right before its questionnaire awaits the user (both the
+`ui.custom` TUI path and the RPC dialog walker) and `{active:false}` in a
+`finally` when the wait ends. agent-sessions-pi-live subscribes to this
+channel: `{active:true}` writes `waiting` instantly, `{active:false}` resumes
+normal poll logic — so rpiv needs **no** sidecar flag and no vendoring. An
+`askUserBlocked` gate is checked first in the 1.5s poll so a later tick never
+clobbers the event-driven `waiting` write back to `running`.
+
+The sidecar-flag protocol above remains for prompting extensions that don't
+emit events (e.g. pi-claude-permissions, the bundled question.ts example).
 
 This is what we use to make the bundled
 [`examples/extensions/question.ts`](https://github.com/earendil-works/pi-mono/tree/main/examples/extensions)
