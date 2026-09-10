@@ -227,6 +227,12 @@ within = "20m"  # ...modified within this window (a Go duration)
 # ones the default Enter command can jump to. Set to "" to hide it.
 glyph = "⊟"
 
+[bg]
+# Marker shown next to sessions running as a detached `claude --background`
+# job: live, but with no tmux pane to jump to (the default Enter attaches
+# with `claude attach` instead of `claude --resume`). Set to "" to hide it.
+glyph = "bg"
+
 [mouse]
 # Off by default. When enabled the app captures mouse events, which means the
 # terminal (and tmux) hand ALL mouse input to the app: your terminal's own
@@ -268,17 +274,36 @@ click_action = "select"
 
 # If the session is running in a tmux pane, jump to it: switch-client
 # moves the client when run inside tmux, attach-session takes over the
-# terminal when run outside it. Otherwise resume the session in a fresh
-# tmux window: the window starts an interactive shell — so your usual
-# environment setup (rc files, version managers like asdf, per-directory
-# tools like direnv, ...) applies — and the claude command is typed into it.
+# terminal when run outside it. Else, if it's running as a `claude
+# --background` job (no pane to jump to — Claude itself refuses to
+# --resume a session its own background process still owns), attach to
+# that job instead -- reusing an already-open attach window (tagged with
+# the session id via -n) rather than opening a duplicate one, since a
+# background job's own registry entry doesn't gain a discoverable pane
+# just because something attached to it. Otherwise resume the session in
+# a fresh tmux window: the window starts an interactive shell — so your
+# usual environment setup (rc files, version managers like asdf,
+# per-directory tools like direnv, ...) applies — and the claude command
+# is typed into it.
 enter = '''
 if [ -n {pane?} ]; then
     tmux select-pane -t {pane?} && tmux select-window -t {pane?}
     tmux switch-client -t {pane?} 2>/dev/null || tmux attach-session -t {pane?}
 else
-    p=$(tmux new-window -P -F "#{pane_id}" -c {cwd})
-    tmux send-keys -t "$p" "claude --resume {id}" Enter
+    w=""
+    if [ -n {jobid?} ]; then
+        w=$(tmux list-windows -a -F "#{window_id} #{window_name}" 2>/dev/null | awk -v n={id} '$2==n{print $1; exit}')
+    fi
+    if [ -n "$w" ]; then
+        tmux select-window -t "$w"
+        tmux switch-client -t "$w" 2>/dev/null || tmux attach-session -t "$w"
+    elif [ -n {jobid?} ]; then
+        p=$(tmux new-window -P -F "#{pane_id}" -n {id} -c {cwd})
+        tmux send-keys -t "$p" "claude attach {jobid?}" Enter
+    else
+        p=$(tmux new-window -P -F "#{pane_id}" -c {cwd})
+        tmux send-keys -t "$p" "claude --resume {id}" Enter
+    fi
 fi
 '''
 

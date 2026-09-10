@@ -91,6 +91,9 @@ type Config struct {
 	Tmux struct {
 		Glyph string `toml:"glyph"` // marker on tmux-attachable sessions; "" hides it
 	} `toml:"tmux"`
+	Bg struct {
+		Glyph string `toml:"glyph"` // marker on sessions running as a detached `claude --background` job; "" hides it
+	} `toml:"bg"`
 	Mouse struct {
 		Enabled     bool   `toml:"enabled"`      // capture mouse events at all
 		ClickAction string `toml:"click_action"` // "select" or "select-switch"

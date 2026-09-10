@@ -242,6 +242,7 @@ type model struct {
 	bgExec         bool              // run key-bound commands detached (no terminal takeover)
 	enterBySource  map[string]string // per-source override of the "enter" command (key = Source)
 	tmuxGlyph      string            // marker for tmux-attachable sessions; "" hides it
+	bgGlyph        string            // marker for detached `claude --background` sessions; "" hides it
 	agentGlyphs    map[string]string // marker keyed by Session.Source
 	agentStyles    map[string]lipgloss.Style
 	colAgentGlyph  int    // display width reserved for the widest source glyph
@@ -381,6 +382,7 @@ func newModel(cfg Config) model {
 		bgExec:         cfg.Background,
 		enterBySource:  enterBySource,
 		tmuxGlyph:      cfg.Tmux.Glyph,
+		bgGlyph:        cfg.Bg.Glyph,
 		agentGlyphs:    agentGlyphs,
 		agentStyles:    agentStyles,
 		colAgentGlyph:  agentGlyphWidth(agentGlyphs),
@@ -1040,21 +1042,25 @@ func (m model) runCommand(tmpl string) (tea.Model, tea.Cmd) {
 	s := m.sessions[m.cursor]
 	tmpl = sourceEnterTemplate(s.Source, tmpl, m.enterBySource)
 	vars := map[string]string{
-		"id":    s.ID,
-		"pid":   strconv.Itoa(s.PID),
-		"pid?":  "",
-		"pane":  s.Pane, // seeded by the adapter's Live() (cwd match for pi); "" if none
-		"pane?": s.Pane,
-		"cwd":   s.CWD,
-		"file":  s.File,
-		"state": string(s.State),
+		"id":     s.ID,
+		"pid":    strconv.Itoa(s.PID),
+		"pid?":   "",
+		"pane":   s.Pane, // seeded by the adapter's Live() (cwd match for pi); "" if none
+		"pane?":  s.Pane,
+		"cwd":    s.CWD,
+		"file":   s.File,
+		"state":  string(s.State),
+		"jobid":  s.JobID, // set when Background; "" otherwise
+		"jobid?": s.JobID,
 	}
 	if s.Live() {
 		vars["pid?"] = strconv.Itoa(s.PID)
 		// For a live session whose adapter didn't already place it (e.g. Claude
 		// sets Pane in Live() too, but a fresh lookup handles a pane move since),
-		// walk the process tree to the hosting pane.
-		if vars["pane"] == "" {
+		// walk the process tree to the hosting pane. Skipped for a background
+		// job: it has no pane of its own, and the walk would just resolve to
+		// whatever pane happened to launch it.
+		if vars["pane"] == "" && !s.Background {
 			if pane, ok := tmuxPaneFor(s.PID); ok {
 				vars["pane"], vars["pane?"] = pane, pane
 			}
@@ -1066,6 +1072,10 @@ func (m model) runCommand(tmpl string) (tea.Model, tea.Cmd) {
 	// jump to the pane, else resume in the current terminal) via `||`.
 	if strings.Contains(tmpl, "{pid}") && !s.Live() {
 		m.notice = "Session has no running agent process."
+		return m, nil
+	}
+	if strings.Contains(tmpl, "{jobid}") && !s.Background {
+		m.notice = "Session is not running as a background job."
 		return m, nil
 	}
 	if strings.Contains(tmpl, "{ci-build-url}") {
@@ -1639,7 +1649,8 @@ func (m model) helpView() string {
 		"    {state}             running/waiting/idle for live sessions, else empty",
 		"    {pid}               pid of the running claude process (live only)",
 		"    {pane}              tmux pane hosting the process (live, in tmux)",
-		"    {pid?} / {pane?}    optional forms: expand empty instead of blocking",
+		"    {jobid}             id for `claude attach`/`stop` (live, --background only)",
+		"    {pid?} / {pane?} / {jobid?}   optional forms: expand empty instead of blocking",
 		"    {ci-build-url}      the latest CircleCI build's page (needs [circleci])",
 		"    {project-picker}    asks: pick a project from every known one",
 		"    {text-input:Label}  asks: a line of text (the label is optional)",
@@ -2025,17 +2036,26 @@ func (m model) statusCell(mk marker) string {
 	return pad(g, m.colGlyph)
 }
 
-// tmuxCell is the fixed-width tmux marker slot, holding the glyph for
-// attachable sessions and blank otherwise, so columns stay aligned. It is
-// empty (no slot at all) when the marker is disabled.
+// tmuxCell is the fixed-width session-reachability marker slot: the glyph
+// for sessions attachable via a tmux pane, or — mutually exclusive, since a
+// live session is either sitting in a pane or running as an unattached
+// `claude --background` job, never both — the glyph for a background job,
+// blank otherwise. The wider of the two configured glyphs sets the slot's
+// width, so columns stay aligned whichever one shows. It is empty (no slot
+// at all) when both markers are disabled.
 func (m model) tmuxCell(s Session) string {
-	if m.tmuxGlyph == "" {
+	w := max(lipgloss.Width(m.tmuxGlyph), lipgloss.Width(m.bgGlyph))
+	if w == 0 {
 		return ""
 	}
-	if s.InTmux() {
-		return "  " + m.tmuxGlyph
+	switch {
+	case s.InTmux():
+		return "  " + pad(m.tmuxGlyph, w)
+	case s.Background:
+		return "  " + pad(m.bgGlyph, w)
+	default:
+		return "  " + strings.Repeat(" ", w)
 	}
-	return "  " + strings.Repeat(" ", lipgloss.Width(m.tmuxGlyph))
 }
 
 // agentCell is the fixed-width source marker slot. It reserves the widest

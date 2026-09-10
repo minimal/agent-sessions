@@ -91,7 +91,14 @@ func (a *claudeAdapter) Sessions() ([]Session, error) {
 // tmux pane each live process sits in. Claude maintains a per-process registry
 // (~/.claude/sessions/<pid>.json) carrying a real PID, so we can walk the
 // process tree to the hosting tmux pane — a precision path unavailable to
-// sources like pi whose process model hides the PID.
+// sources like pi whose process model hides the PID. A session started with
+// `claude --background` has no controlling tty; its process is still a
+// regular OS child of whatever shell/pane launched it, though, so the
+// process-tree walk below must not be trusted to find a pane for it -- it
+// would resolve to that unrelated launcher pane instead. Background and
+// JobID flag that case so the enter command can offer `claude attach
+// <jobid>` instead of a `claude --resume` that Claude itself refuses (the
+// session is already owned by the running background process).
 func (a *claudeAdapter) Live(sessions []Session) {
 	live := liveStates()
 	var panes map[int]paneInfo
@@ -106,6 +113,11 @@ func (a *claudeAdapter) Live(sessions []Session) {
 		}
 		sessions[i].State = info.State
 		sessions[i].PID = info.PID
+		sessions[i].Background = info.Background
+		sessions[i].JobID = info.JobID
+		if info.Background {
+			continue // no attachable pane -- its OS ancestry is just its launcher's
+		}
 		if !loaded {
 			panes, loaded = tmuxPanes(), true
 		}
@@ -276,6 +288,8 @@ type registrySession struct {
 	SessionID string `json:"sessionId"`
 	StartedAt int64  `json:"startedAt"` // milliseconds since the epoch
 	Status    string `json:"status"`
+	Kind      string `json:"kind"`  // "interactive" (has a tty/pane) or "bg" (claude --background)
+	JobID     string `json:"jobId"` // short id `claude attach`/`claude stop` take; set when Kind is "bg"
 }
 
 // procStartTolerance is how far a process's start time may sit from the
@@ -286,8 +300,10 @@ const procStartTolerance = 15 * time.Second
 
 // liveInfo is what the registry tells us about one running session.
 type liveInfo struct {
-	State SessionState
-	PID   int
+	State      SessionState
+	PID        int
+	Background bool   // true when Kind is "bg": running detached, no pane to jump to
+	JobID      string // set when Background; the id `claude attach`/`claude stop` take
 }
 
 // liveStates reads the session registry and returns sessionID -> liveInfo for
@@ -321,7 +337,7 @@ func liveStates() map[string]liveInfo {
 		if !ok {
 			state = StateUnknown
 		}
-		live[r.SessionID] = liveInfo{State: state, PID: r.PID}
+		live[r.SessionID] = liveInfo{State: state, PID: r.PID, Background: r.Kind == "bg", JobID: r.JobID}
 	}
 	return live
 }

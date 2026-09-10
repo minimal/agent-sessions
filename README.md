@@ -137,8 +137,10 @@ default selection UI, used anywhere a choice is asked for.
 `Enter` runs a configurable shell command (see below). For a live session
 the default finds the tmux pane whose process tree contains the session's
 `claude` process and jumps there: inside tmux it switches the current
-client, outside tmux it attaches. For a dead session it resumes the
-conversation with `claude --resume` in a fresh tmux window.
+client, outside tmux it attaches. A session started with `claude
+--background` has no pane to jump to, so it's attached with `claude
+attach` instead. For a dead session it resumes the conversation with
+`claude --resume` in a fresh tmux window.
 
 ## Configuration
 
