@@ -24,6 +24,47 @@ The `Session` struct is already nearly generic. The only real Claude-isms on it
 are `Slug` (harmless; pi leaves it `""`) and the *semantics* of `Title` (Claude's
 `aiTitle`; pi will fill it from the first user prompt or a named session).
 
+## Claude live-state signals (measured 2026-09-11, claude 2.1.268)
+
+Two surfaces report on running Claude sessions. They overlap, and the more
+official-looking one is the wrong pick for this list.
+
+**`~/.claude/sessions/<pid>.json` (the registry)** — what `liveStates` reads.
+Per running process, written by the process itself.
+
+- `status` (busy|waiting|idle) is the live turn status **for background jobs as
+  much as interactive ones**. Polled every 5s against two throwaway bg jobs:
+  `busy` throughout a working turn then `idle`; `waiting` for the whole time a
+  job sat on a question. `statusUpdatedAt` on long-lived bg entries runs days
+  past `startedAt`.
+- `tmux` ("<session>:@<window>.%<pane>") is the pane the process runs in.
+  Present on interactive entries back to 2.1.239 and exact; absent on `bg`
+  entries, and that absence is the authoritative "no pane to jump to". The
+  field does not say *which* tmux server, so a multi-server layout still needs
+  both searched.
+- `spare:true` marks a pre-warmed `claude bg-spare` pool process. It looks like
+  an ordinary bg job (a `jobId`, a `name` equal to it) but hosts no
+  conversation, so it must be skipped. Note a *claimed* spare keeps the
+  `bg-spare` argv while hosting a real job — go by the field, not by `ps`.
+
+**`claude agents --json`** — TTY-free, ~350ms, documented. Adds `id` and
+`state` for background jobs. Vocabulary differs: CLI `kind:"background"`/`id`
+vs registry `kind:"bg"`/`jobId`.
+
+- Its `status` is the same value the registry carries.
+- Its `state` (working|blocked|done|failed|stopped) is the job **lifecycle**,
+  not live status, and is the trap: it sticks on `working` for a job that never
+  finished cleanly, and reads `blocked` for a session parked out of an
+  interactive one. Both look like live states and are not. Parked jobs are
+  identifiable by a socket in `/tmp/cc-daemon-<uid>/<server>/pty/<jobid>.sock`.
+- It filters spares out, so it can serve as a cross-check for them.
+
+So the adapter takes state from the registry and spawns no subprocess. See
+agent-sessions-2z8 for the full measurement, and the note on `registryStates`
+in `claude.go`. Still unexposed and worth having one day: "parked, waiting for
+you" is real information the registry has no word for — a separate column, not
+an override of `status`.
+
 ## How pi stores sessions (verified on this machine)
 
 - **Location:** `~/.pi/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`,

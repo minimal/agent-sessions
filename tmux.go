@@ -34,6 +34,30 @@ func tmuxPanes() map[int]paneInfo {
 	return panes
 }
 
+// tmuxPaneTargets returns target -> pane for every pane on the server, keyed by
+// "<session>:@<window>.%<pane>" — the form Claude Code records in its registry.
+// Resolving a registry target through this map both yields the pane's
+// human-readable name and proves the pane is still alive.
+//
+// Only the server $TMUX points at is visible, as with tmuxPanes: a target on
+// another server simply doesn't resolve.
+func tmuxPaneTargets() map[string]paneInfo {
+	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
+		"#{session_name}:#{window_id}.#{pane_id}\t#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}").Output()
+	if err != nil {
+		return nil
+	}
+	panes := map[string]paneInfo{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) != 3 {
+			continue
+		}
+		panes[fields[0]] = paneInfo{ID: fields[1], Name: fields[2]}
+	}
+	return panes
+}
+
 // paneFor finds the pane that pid runs in, walking pid's ancestor chain
 // until it hits a pane's root process.
 func paneFor(panes map[int]paneInfo, pid int) (paneInfo, bool) {

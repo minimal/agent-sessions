@@ -89,19 +89,23 @@ func (a *claudeAdapter) Sessions() ([]Session, error) {
 
 // Live attaches the state reported by running Claude Code processes and the
 // tmux pane each live process sits in. Claude maintains a per-process registry
-// (~/.claude/sessions/<pid>.json) carrying a real PID, so we can walk the
-// process tree to the hosting tmux pane — a precision path unavailable to
-// sources like pi whose process model hides the PID. A session started with
-// `claude --background` has no controlling tty; its process is still a
-// regular OS child of whatever shell/pane launched it, though, so the
-// process-tree walk below must not be trusted to find a pane for it -- it
-// would resolve to that unrelated launcher pane instead. Background and
-// JobID flag that case so the enter command can offer `claude attach
-// <jobid>` instead of a `claude --resume` that Claude itself refuses (the
-// session is already owned by the running background process).
+// (~/.claude/sessions/<pid>.json) recording both the session's status and the
+// pane it runs in — a precision path unavailable to sources like pi, which
+// keep no per-process state and have to match panes by cwd.
+//
+// A session started with `claude --background` carries no "tmux" field, which
+// is correct: a background job has no pane of its own. Its process is still an
+// OS child of whatever shell launched it, so the old process-tree walk used to
+// invent that launcher's pane for it. Background and JobID flag the case so the
+// enter command can offer `claude attach <jobid>` instead of a `claude
+// --resume` that Claude itself refuses (the running job already owns the
+// session).
+//
+// The registry's "status" is live for background jobs as much as interactive
+// ones -- see the note on registryStates before reaching for the CLI.
 func (a *claudeAdapter) Live(sessions []Session) {
 	live := liveStates()
-	var panes map[int]paneInfo
+	var panes map[string]paneInfo
 	loaded := false
 	for i := range sessions {
 		if sessions[i].Source != "claude" {
@@ -115,13 +119,13 @@ func (a *claudeAdapter) Live(sessions []Session) {
 		sessions[i].PID = info.PID
 		sessions[i].Background = info.Background
 		sessions[i].JobID = info.JobID
-		if info.Background {
-			continue // no attachable pane -- its OS ancestry is just its launcher's
+		if info.Pane == "" {
+			continue // the registry records no pane: nothing to jump to
 		}
 		if !loaded {
-			panes, loaded = tmuxPanes(), true
+			panes, loaded = tmuxPaneTargets(), true
 		}
-		if p, ok := paneFor(panes, info.PID); ok {
+		if p, ok := panes[info.Pane]; ok {
 			sessions[i].Pane = p.Name // session:window.pane, the format runCommand expects
 		}
 	}
@@ -275,6 +279,14 @@ func userPrompt(l transcriptLine) string {
 }
 
 // registryStates translates the Claude registry's status vocabulary to ours.
+//
+// This is the live status for background jobs too, not just interactive ones.
+// `claude agents --json` also reports a "state" (working|blocked|done|failed|
+// stopped), which looks like a richer signal and is not: it is the job's
+// lifecycle, so it sits on "working" for a job that never finished cleanly and
+// on "blocked" for a parked session. Measured against a live job, "status"
+// tracks the turn exactly -- busy while working, waiting while the job sits on
+// a permission prompt or a question -- and costs no subprocess.
 var registryStates = map[string]SessionState{
 	"busy":    StateRunning,
 	"waiting": StateWaiting,
@@ -290,6 +302,8 @@ type registrySession struct {
 	Status    string `json:"status"`
 	Kind      string `json:"kind"`  // "interactive" (has a tty/pane) or "bg" (claude --background)
 	JobID     string `json:"jobId"` // short id `claude attach`/`claude stop` take; set when Kind is "bg"
+	Spare     bool   `json:"spare"` // a pre-warmed pool process, not a session the user started
+	Tmux      string `json:"tmux"`  // "<session>:@<window>.%<pane>" the process runs in; interactive only
 }
 
 // procStartTolerance is how far a process's start time may sit from the
@@ -304,6 +318,7 @@ type liveInfo struct {
 	PID        int
 	Background bool   // true when Kind is "bg": running detached, no pane to jump to
 	JobID      string // set when Background; the id `claude attach`/`claude stop` take
+	Pane       string // the registry's own "<session>:@<window>.%<pane>"; "" when it records none
 }
 
 // liveStates reads the session registry and returns sessionID -> liveInfo for
@@ -333,11 +348,24 @@ func liveStates() map[string]liveInfo {
 		if start == 0 || delta.Abs() > procStartTolerance {
 			continue // stale file: pid dead or recycled
 		}
+		if r.Spare {
+			// A pre-warmed pool process. It writes a registry file like any
+			// other bg job (kind "bg", a jobId, a name equal to the jobId) but
+			// hosts no conversation, so listing it would offer an `attach` to
+			// an empty session. `claude agents --json` filters these out too.
+			continue
+		}
 		state, ok := registryStates[r.Status]
 		if !ok {
 			state = StateUnknown
 		}
-		live[r.SessionID] = liveInfo{State: state, PID: r.PID, Background: r.Kind == "bg", JobID: r.JobID}
+		live[r.SessionID] = liveInfo{
+			State:      state,
+			PID:        r.PID,
+			Background: r.Kind == "bg",
+			JobID:      r.JobID,
+			Pane:       r.Tmux,
+		}
 	}
 	return live
 }
