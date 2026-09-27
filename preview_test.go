@@ -1263,6 +1263,89 @@ func TestColumnWidthsRecomputeOnFilter(t *testing.T) {
 	}
 }
 
+// TestTimeCellBuckets pins the timestamp format: HH:MM for the current
+// calendar day, MM-DD for every other date. The year is never shown, so the
+// cell is always colTime cells wide -- a December session in January must not
+// widen the column.
+func TestTimeCellBuckets(t *testing.T) {
+	now := time.Date(2026, 1, 5, 14, 30, 0, 0, time.Local)
+	cases := []struct {
+		name string
+		when time.Time
+		want string
+	}{
+		{"today", time.Date(2026, 1, 5, 9, 5, 0, 0, time.Local), "09:05"},
+		{"today last minute", time.Date(2026, 1, 5, 23, 59, 0, 0, time.Local), "23:59"},
+		{"yesterday", time.Date(2026, 1, 4, 23, 59, 0, 0, time.Local), "01-04"},
+		{"last year", time.Date(2025, 12, 31, 23, 59, 0, 0, time.Local), "12-31"},
+		{"two years ago", time.Date(2024, 3, 14, 9, 0, 0, 0, time.Local), "03-14"},
+	}
+	for _, tc := range cases {
+		got := timeCell(now, tc.when)
+		if got != tc.want {
+			t.Errorf("%s: timeCell = %q, want %q", tc.name, got, tc.want)
+		}
+		if w := lipgloss.Width(got); w != colTime {
+			t.Errorf("%s: cell %q is %d cells, want %d", tc.name, got, w, colTime)
+		}
+	}
+}
+
+// TestTimeColumnNeverShowsTheYear renders today, last-year and older sessions
+// together: each keeps the 5-cell timestamp and the columns after it stay
+// aligned.
+func TestTimeColumnNeverShowsTheYear(t *testing.T) {
+	now := time.Date(2026, 1, 5, 14, 30, 0, 0, time.Local)
+	m := testModel(previewRow, []Session{
+		{ID: "today", Title: "a", CWD: "/code/alpha", Modified: now.Add(-time.Hour)},
+		{ID: "december", Title: "b", CWD: "/code/beta", Modified: time.Date(2025, 12, 31, 23, 0, 0, 0, time.Local)},
+		{ID: "old", Title: "c", CWD: "/code/gamma", Modified: time.Date(2024, 3, 14, 9, 0, 0, 0, time.Local)},
+	})
+	m.now = func() time.Time { return now }
+	m.computeWidths()
+	rows := make([]string, len(m.sessions))
+	for i, want := range []string{"13:30", "12-31", "03-14"} {
+		rows[i] = m.renderRow(i, false, lipgloss.NewStyle(), false)
+		if !strings.Contains(rows[i], want) {
+			t.Errorf("row %d should show %q, got:\n%s", i, want, rows[i])
+		}
+		if strings.Contains(rows[i], "25-12-31") || strings.Contains(rows[i], "24-03-14") {
+			t.Errorf("row %d should not show a year, got:\n%s", i, rows[i])
+		}
+	}
+	if strings.Index(rows[0], "alpha") != strings.Index(rows[1], "beta") {
+		t.Errorf("columns after the timestamp should stay aligned:\n%s\n%s", rows[0], rows[1])
+	}
+	if strings.Index(rows[0], "alpha") != strings.Index(rows[2], "gamma") {
+		t.Errorf("columns after the timestamp should stay aligned:\n%s\n%s", rows[0], rows[2])
+	}
+}
+
+// TestTimeColumnReformatsOnClockAdvance covers midnight drift: the next tick
+// re-render picks the new bucket, and a year rollover changes the date
+// without widening the cell.
+func TestTimeColumnReformatsOnClockAdvance(t *testing.T) {
+	clock := time.Date(2026, 9, 27, 23, 59, 0, 0, time.Local)
+	m := testModel(previewRow, []Session{{ID: "a", Title: "a", Modified: clock}})
+	m.now = func() time.Time { return clock }
+	m.computeWidths()
+	if row := m.renderRow(0, false, lipgloss.NewStyle(), false); !strings.Contains(row, "23:59") {
+		t.Fatalf("before midnight the cell should show HH:MM, got:\n%s", row)
+	}
+
+	clock = time.Date(2026, 9, 28, 0, 1, 0, 0, time.Local) // same year, next day
+	row := m.renderRow(0, false, lipgloss.NewStyle(), false)
+	if !strings.Contains(row, "09-27") || strings.Contains(row, "23:59") {
+		t.Errorf("after midnight the cell should show MM-DD, got:\n%s", row)
+	}
+
+	clock = time.Date(2027, 1, 1, 0, 1, 0, 0, time.Local) // year rollover
+	row = m.renderRow(0, false, lipgloss.NewStyle(), false)
+	if !strings.Contains(row, "09-27") || strings.Contains(row, "26-09-27") {
+		t.Errorf("after a year rollover the cell should still show MM-DD, got:\n%s", row)
+	}
+}
+
 // TestColumnWidthsConfigDefaults verifies the shipped config has non-zero
 // maxes for every column, so an upgrade is a no-op for users who don't
 // touch [columns].
