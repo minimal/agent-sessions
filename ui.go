@@ -132,12 +132,14 @@ const dimAfter = 24 * time.Hour
 // Keep agent-generated subjects from overwhelming status-bar prompts.
 const trashSubjectMaxWidth = 80
 
-// colCI and colCtx are fixed-width columns, gated by their config sections.
-// The dir, branch, model, pane, title and last columns are sized dynamically per
-// the [columns] config -- see widths and computeWidths.
+// colCI, colCtx and colTime are fixed-width columns. The time cell is always
+// 5 cells (HH:MM today, MM-DD otherwise); the year is never shown. The dir,
+// branch, model, pane, title and last columns are sized dynamically per the
+// [columns] config -- see widths and computeWidths.
 const (
-	colCI  = 4
-	colCtx = 5
+	colCI   = 4
+	colCtx  = 5
+	colTime = 5
 )
 
 // colState fits every state word the index can show. colRunningDuration fits
@@ -721,6 +723,18 @@ func (m *model) observedPaneWidth() int {
 		}
 	}
 	return w
+}
+
+// timeCell renders a session's timestamp compactly: HH:MM for the current
+// calendar day and MM-DD for every other date. The year is never shown, so
+// the cell is always colTime cells wide. Comparison and formatting happen in
+// the local timezone, so timestamps stored in UTC display in local time.
+func timeCell(now, when time.Time) string {
+	now, when = now.Local(), when.Local()
+	if when.Year() == now.Year() && when.YearDay() == now.YearDay() {
+		return when.Format("15:04")
+	}
+	return when.Format("01-02")
 }
 
 // computeWidths fills m.widths for the current m.sessions. Call this after
@@ -1743,7 +1757,7 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 	b.WriteString(seg(m.agentStyles[s.Source], m.agentCell(s)))
 	b.WriteString(seg(lipgloss.NewStyle(), m.tmuxCell(s)))
 	b.WriteString(gap(1))
-	b.WriteString(seg(m.styles.time, s.When().Format("01-02 15:04")))
+	b.WriteString(seg(m.styles.time, truncPad(timeCell(m.currentTime(), s.When()), colTime)))
 
 	// Dynamic-width columns. Each emit() prepends a 2-space gap, so a hidden
 	// column (width 0) skips both its cell and the gap that would separate
