@@ -76,8 +76,11 @@ faint = true
 [styles.index]     # the leading row number
 fg = "8"
 
-[styles.time]      # the last-activity timestamp
+[styles.time]      # the last-activity timestamp, for older dates (MM-DD)
 fg = "8"
+
+[styles.time_today] # the last-activity timestamp, for today (HH:MM)
+bold = true
 
 [styles.project]   # the directory column
 fg = "4"
@@ -357,6 +360,7 @@ enter = "tmux select-pane -t {pane} && tmux select-window -t {pane} && tmux swit
 #   [styles.unread]   fg = "#fab387"  bold = true   # peach
 #   [styles.index]    fg = "#6c7086"                # overlay0
 #   [styles.time]     fg = "#6c7086"                # overlay0
+#   [styles.time_today] fg = "#cdd6f4"  bold = true  # text
 #   [styles.project]  fg = "#89b4fa"                # blue
 #   [styles.branch]   fg = "#cba6f7"                # mauve
 #   [styles.model]    fg = "#89dceb"                # sky

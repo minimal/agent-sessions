@@ -33,13 +33,14 @@ type Config struct {
 		Bar      StyleConfig `toml:"bar"`
 		Selected StyleConfig `toml:"selected"`
 		Preview  StyleConfig `toml:"preview"`
-		Index    StyleConfig `toml:"index"`    // the leading row number
-		Time     StyleConfig `toml:"time"`     // the last-activity timestamp
-		Project  StyleConfig `toml:"project"`  // the directory column
-		Branch   StyleConfig `toml:"branch"`   // the git branch column
-		Model    StyleConfig `toml:"model"`    // the model column
-		Subject  StyleConfig `toml:"subject"`  // the session title column
-		Worktree StyleConfig `toml:"worktree"` // marker shown next to worktree projects
+		Index    StyleConfig `toml:"index"`      // the leading row number
+		Time     StyleConfig `toml:"time"`       // the last-activity timestamp (older dates)
+		TimeNow  StyleConfig `toml:"time_today"` // the last-activity timestamp (today)
+		Project  StyleConfig `toml:"project"`    // the directory column
+		Branch   StyleConfig `toml:"branch"`     // the git branch column
+		Model    StyleConfig `toml:"model"`      // the model column
+		Subject  StyleConfig `toml:"subject"`    // the session title column
+		Worktree StyleConfig `toml:"worktree"`   // marker shown next to worktree projects
 	} `toml:"styles"`
 	Commands map[string]string `toml:"commands"`
 	CircleCI struct {

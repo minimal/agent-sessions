@@ -1427,3 +1427,17 @@ func TestColumnSubjectCap(t *testing.T) {
 		t.Errorf("last message should still be shown, got:\n%s", out)
 	}
 }
+
+// TestIsToday pins the same-day check that picks the bold time style.
+func TestIsToday(t *testing.T) {
+	now := time.Date(2026, 1, 5, 14, 30, 0, 0, time.Local)
+	if !isToday(now, time.Date(2026, 1, 5, 0, 0, 0, 0, time.Local)) {
+		t.Error("midnight today: want true")
+	}
+	if isToday(now, time.Date(2026, 1, 4, 23, 59, 0, 0, time.Local)) {
+		t.Error("yesterday: want false")
+	}
+	if isToday(now, time.Date(2025, 1, 5, 14, 30, 0, 0, time.Local)) {
+		t.Error("same day last year: want false")
+	}
+}

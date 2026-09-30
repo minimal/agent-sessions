@@ -177,6 +177,7 @@ type styles struct {
 	offline  lipgloss.Style
 	index    lipgloss.Style
 	time     lipgloss.Style
+	timeNow  lipgloss.Style
 	project  lipgloss.Style
 	branch   lipgloss.Style
 	model    lipgloss.Style
@@ -195,6 +196,7 @@ func newStyles(cfg Config) styles {
 		offline:  cfg.Styles.Offline.style(),
 		index:    cfg.Styles.Index.style(),
 		time:     cfg.Styles.Time.style(),
+		timeNow:  cfg.Styles.TimeNow.style(),
 		project:  cfg.Styles.Project.style(),
 		branch:   cfg.Styles.Branch.style(),
 		model:    cfg.Styles.Model.style(),
@@ -730,11 +732,16 @@ func (m *model) observedPaneWidth() int {
 // the cell is always colTime cells wide. Comparison and formatting happen in
 // the local timezone, so timestamps stored in UTC display in local time.
 func timeCell(now, when time.Time) string {
-	now, when = now.Local(), when.Local()
-	if when.Year() == now.Year() && when.YearDay() == now.YearDay() {
-		return when.Format("15:04")
+	if isToday(now, when) {
+		return when.Local().Format("15:04")
 	}
-	return when.Format("01-02")
+	return when.Local().Format("01-02")
+}
+
+// isToday reports whether when falls on the same local calendar day as now.
+func isToday(now, when time.Time) bool {
+	now, when = now.Local(), when.Local()
+	return when.Year() == now.Year() && when.YearDay() == now.YearDay()
 }
 
 // computeWidths fills m.widths for the current m.sessions. Call this after
@@ -1757,7 +1764,12 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 	b.WriteString(seg(m.agentStyles[s.Source], m.agentCell(s)))
 	b.WriteString(seg(lipgloss.NewStyle(), m.tmuxCell(s)))
 	b.WriteString(gap(1))
-	b.WriteString(seg(m.styles.time, truncPad(timeCell(m.currentTime(), s.When()), colTime)))
+	now, when := m.currentTime(), s.When()
+	timeStyle := m.styles.time
+	if isToday(now, when) {
+		timeStyle = m.styles.timeNow
+	}
+	b.WriteString(seg(timeStyle, truncPad(timeCell(now, when), colTime)))
 
 	// Dynamic-width columns. Each emit() prepends a 2-space gap, so a hidden
 	// column (width 0) skips both its cell and the gap that would separate
