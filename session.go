@@ -194,7 +194,7 @@ func sameSortDims(a, b []sortDim) bool {
 
 // nextSortGroup returns the preset after group in the cycle. group is matched
 // after parsing, so spelling variants of a preset count. A custom or unknown
-// value starts the cycle at the first preset (plain recency), so its
+// value is treated as sitting at the first preset (plain recency), so the
 // configured order is lost on the first press.
 func nextSortGroup(group string) string {
 	dims := parseSortDims(group)
@@ -228,8 +228,8 @@ const groupRecencyBucket = time.Minute
 var ageWindowPresets = []time.Duration{0, 7 * 24 * time.Hour, 30 * 24 * time.Hour}
 
 // nextAgeWindow returns the window after d in the cycle. A custom or unknown
-// value starts the cycle at the first preset (no window), so its configured
-// window is lost on the first press.
+// value is treated as sitting at the first preset (no window), so the
+// configured window is lost on the first press.
 func nextAgeWindow(d time.Duration) time.Duration {
 	for i, preset := range ageWindowPresets {
 		if preset == d {
