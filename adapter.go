@@ -223,18 +223,17 @@ func isWorktreeCached(cwd string, cache map[string]bool) bool {
 }
 
 // multiLoader runs every enabled adapter and merges their sessions into one
-// freshest-first list with live state attached. It stands in for the old
-// single-source loader: the UI calls Load() and stays source-agnostic. The
-// sort dimensions (group by repo, float live, etc.) are configured by the UI
-// and applied here so every source benefits from the same ordering.
+// list with live state attached. It stands in for the old single-source
+// loader: the UI calls Load() and stays source-agnostic. Ordering is the
+// UI's: it sorts the loaded slice by the sort dimensions in effect, which
+// keeps the loader free of mutable state shared with the command goroutine.
 type multiLoader struct {
 	adapters []Adapter
-	sortDims []sortDim
 	trasher  trasher
 }
 
-func newMultiLoader(adapters []Adapter, sortDims []sortDim) *multiLoader {
-	return &multiLoader{adapters: adapters, sortDims: sortDims, trasher: systemTrasher()}
+func newMultiLoader(adapters []Adapter) *multiLoader {
+	return &multiLoader{adapters: adapters, trasher: systemTrasher()}
 }
 
 func (ml *multiLoader) Trash(s Session) error {
@@ -274,6 +273,5 @@ func (ml *multiLoader) Load() ([]Session, error) {
 		all[i].Repo = repoKeyCached(all[i].CWD, repos)
 		all[i].Worktree = isWorktreeCached(all[i].CWD, worktrees)
 	}
-	sortSessions(all, ml.sortDims)
 	return all, nil
 }

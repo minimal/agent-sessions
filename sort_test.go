@@ -211,18 +211,25 @@ func TestSortKeyCyclesPresets(t *testing.T) {
 	}
 }
 
-func TestSortKeyKeepsLoaderDims(t *testing.T) {
+// TestSortKeySurvivesReload presses s and then delivers a load the way the
+// periodic refresh does: the list must come back in the runtime mode, not the
+// configured one.
+func TestSortKeySurvivesReload(t *testing.T) {
 	m := model{
-		loader:             newMultiLoader(nil, parseSortDims("activity")),
 		all:                sortKeyFixtures(),
 		sortGroup:          "activity",
 		configuredSortDims: parseSortDims("activity"),
+		seen:               map[string]SessionState{},
+		unread:             map[string]bool{},
 	}
 	m.sessions = m.all
 	mm, _ := m.Update(key("s"))
 	m = mm.(model)
-	if got := m.loader.sortDims; !sameSortDims(got, parseSortDims("repo")) {
-		t.Errorf("loader dims after s = %v, want the repo dims so a reload keeps the choice", got)
+	mm, _ = m.Update(sessionsLoadedMsg{sessions: sortKeyFixtures()})
+	m = mm.(model)
+	want := []string{"z-live", "z-done", "y-live", "y-done", "a-done"} // repo order
+	if got := order(m.sessions); !equalStrings(got, want) {
+		t.Errorf("after a reload: %v, want %v", got, want)
 	}
 }
 

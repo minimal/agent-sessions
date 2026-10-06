@@ -479,7 +479,7 @@ func TestMultiLoaderMergeAndRender(t *testing.T) {
 	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
 		t.Fatal(err)
 	}
-	ml := newMultiLoader([]Adapter{newClaudeAdapter(), newPiAdapter(cfg.Sources.Pi.SessionDir)}, cfg.SortDims())
+	ml := newMultiLoader([]Adapter{newClaudeAdapter(), newPiAdapter(cfg.Sources.Pi.SessionDir)})
 	sessions, err := ml.Load()
 	if err != nil {
 		t.Fatalf("multiLoader.Load: %v", err)

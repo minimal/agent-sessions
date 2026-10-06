@@ -384,7 +384,7 @@ func newModel(cfg Config) model {
 	dims := cfg.SortDims()
 	ageWindow, ageWarn := cfg.FilterWithin()
 	m := model{
-		loader:             newMultiLoader(adapters, dims),
+		loader:             newMultiLoader(adapters),
 		sortGroup:          cfg.Sort.Group,
 		configuredSortDims: dims,
 		styles:             newStyles(cfg),
@@ -838,6 +838,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Error: " + msg.err.Error()
 			return m, nil
 		}
+		// The loader delivers sessions in adapter order; ordering is applied
+		// here, on every load, so a reload keeps the runtime sort mode.
+		sortSessions(msg.sessions, parseSortDims(m.sortGroup))
 		m.observeRunning(msg.sessions)
 		m.detectUnread(msg.sessions)
 		m.all = msg.sessions
@@ -959,6 +962,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "s":
 			m.setSortGroup(nextSortGroup(m.sortGroup))
 		case "esc":
+			// The sort mode is not a filter: Esc leaves it alone.
 			if m.filterActive() {
 				m.query = ""
 				m.project = ""
@@ -1428,18 +1432,14 @@ func (m *model) selectSession(id string) {
 
 // setSortGroup switches the index ordering and re-sorts the loaded list in
 // place -- sorting only needs fields Load already fills, so no reload is
-// needed. The loader's dimensions follow, so the next periodic reload keeps
-// the user's choice instead of reverting to the configured order, and the
-// cursor stays on the session it was on.
+// needed. Every later load is ordered by the new mode too, and the cursor
+// stays on the session it was on.
 func (m *model) setSortGroup(group string) {
 	var selectedID string
 	if m.cursor < len(m.sessions) {
 		selectedID = m.sessions[m.cursor].ID
 	}
 	m.sortGroup = group
-	if m.loader != nil {
-		m.loader.sortDims = parseSortDims(group)
-	}
 	sortSessions(m.all, parseSortDims(group))
 	m.applyFilter()
 	m.selectSession(selectedID)

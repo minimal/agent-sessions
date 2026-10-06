@@ -159,7 +159,7 @@ func TestCopilotTrashMovesWholeSessionDirectory(t *testing.T) {
 	}
 
 	trashRoot := filepath.Join(t.TempDir(), "trash")
-	loader := newMultiLoader([]Adapter{adapter}, nil)
+	loader := newMultiLoader([]Adapter{adapter})
 	loader.trasher = fallbackTrasher(trashRoot)
 	m := model{loader: loader, deleting: &trashConfirmation{session: session}}
 	updated, _ := m.Update(key("y"))
@@ -207,7 +207,7 @@ func trashConfirmationModel(t *testing.T, size, threshold int64) (model, string)
 		Size:   size,
 		Source: "claude",
 	}
-	loader := newMultiLoader([]Adapter{newClaudeAdapter()}, nil)
+	loader := newMultiLoader([]Adapter{newClaudeAdapter()})
 	loader.trasher = fallbackTrasher(filepath.Join(t.TempDir(), "trash"))
 	return model{
 		loader:        loader,
