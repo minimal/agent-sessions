@@ -262,8 +262,9 @@ behind all of them.
 
 Press `s` to cycle the three presets at runtime; `group` above only sets the
 starting order. The status bar names the mode once it differs from the config.
-A custom value (say `"repo,active"`) is not part of the cycle: the first `s`
-restarts at the presets, losing the configured order.
+`Esc` clears the filters but not the sort mode, which lasts until the next
+restart. A custom value (say `"repo,active"`) is not part of the cycle: the
+first `s` restarts at the presets, losing the configured order.
 
 The `[filter]` section sets what the index starts with. `running = true`
 applies the "only running" filter on start (the `o` toggle). `within` sets a
