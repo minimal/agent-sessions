@@ -634,13 +634,14 @@ func TestReverseStatusColor(t *testing.T) {
 	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
 		t.Fatal(err)
 	}
-	now := time.Now()
+	now := time.Date(2026, 1, 2, 15, 4, 0, 0, time.Local)
 	sess := []Session{{ID: "i", Title: "idle", PID: 1, State: StateIdle, Modified: now, Activity: now}}
 	const cyanBg = "46" // [styles.idle] fg = "6" put on the bg channel -> ANSI bg cyan
 
 	// Off: the idle marker is inverted with the rest of the reverse bar, no
 	// colour applied at all.
 	off := newModel(cfg)
+	off.now = func() time.Time { return now }
 	off.all, off.sessions = sess, sess
 	off.width, off.height = 80, 8
 	if strings.Contains(off.renderRow(0, false, off.styles.selected, true), cyanBg) {
@@ -653,6 +654,7 @@ func TestReverseStatusColor(t *testing.T) {
 	// reverse.
 	cfg.Selection.StatusColor = true
 	on := newModel(cfg)
+	on.now = func() time.Time { return now }
 	on.all, on.sessions = sess, sess
 	on.width, on.height = 80, 8
 	out := on.renderRow(0, false, on.styles.selected, true)
