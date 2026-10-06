@@ -103,7 +103,8 @@ type Config struct {
 		Group string `toml:"group"` // "activity" (default) or "repo"
 	} `toml:"sort"`
 	Filter struct {
-		Running bool `toml:"running"` // start with the "only running" filter ('o') already applied
+		Running bool   `toml:"running"` // start with the "only running" filter ('o') already applied
+		Within  string `toml:"within"`  // starting age window, a Go duration; "" or malformed = all
 	} `toml:"filter"`
 	Git struct {
 		Icon   string   `toml:"icon"`   // per-repo glyph; "" hides the column
@@ -201,6 +202,20 @@ func (c Config) PreviewWithin() time.Duration {
 		return d
 	}
 	return 20 * time.Minute
+}
+
+// FilterWithin parses the [filter] within setting: the age window the index
+// starts with. An empty value means no window. A malformed one also means no
+// window, so a typo can't hide every session; the returned warning says so.
+func (c Config) FilterWithin() (time.Duration, string) {
+	if c.Filter.Within == "" {
+		return 0, ""
+	}
+	d, err := time.ParseDuration(c.Filter.Within)
+	if err != nil || d < 0 {
+		return 0, fmt.Sprintf("[filter] within %q is not a valid duration; showing all sessions", c.Filter.Within)
+	}
+	return d, ""
 }
 
 type runningTimerMode string

@@ -163,6 +163,10 @@ group = "activity"
 # false (default) shows every session on start. true begins with the "only
 # running" filter already applied, same as pressing 'o'.
 running = false
+# Starting age window, as a Go duration: "" (default) shows every session.
+# Press 'a' to cycle the window at runtime (all -> last 7 days -> last 30 days).
+# A malformed value shows every session and warns on the status bar.
+within = ""
 
 [git]
 # An optional per-repo coloured glyph, drawn just before the branch column, that

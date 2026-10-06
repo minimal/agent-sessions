@@ -223,6 +223,47 @@ func byRecency(a, b Session) bool {
 // the groups on every refresh, only activity a whole bucket newer does.
 const groupRecencyBucket = time.Minute
 
+// ageWindowPresets are the windows the 'a' key cycles through: no window,
+// then the last 7 and 30 days.
+var ageWindowPresets = []time.Duration{0, 7 * 24 * time.Hour, 30 * 24 * time.Hour}
+
+// nextAgeWindow returns the window after d in the cycle. A custom or unknown
+// value starts the cycle at the first preset (no window), so its configured
+// window is lost on the first press.
+func nextAgeWindow(d time.Duration) time.Duration {
+	for i, preset := range ageWindowPresets {
+		if preset == d {
+			return ageWindowPresets[(i+1)%len(ageWindowPresets)]
+		}
+	}
+	return ageWindowPresets[1]
+}
+
+// ageWindowLabel names a window for the status bar: "" when every session
+// shows, "last 7 days" for day multiples, and a coarser form otherwise.
+func ageWindowLabel(d time.Duration) string {
+	if d <= 0 {
+		return ""
+	}
+	const (
+		day  = 24 * time.Hour
+		hour = time.Hour
+		min  = time.Minute
+	)
+	switch {
+	case d%day == 0:
+		if days := int(d / day); days != 1 {
+			return fmt.Sprintf("last %d days", days)
+		}
+		return "last 24h"
+	case d%hour == 0:
+		return fmt.Sprintf("last %dh", d/hour)
+	case d%min == 0:
+		return fmt.Sprintf("last %dm", d/min)
+	}
+	return "last " + d.String()
+}
+
 // rankRepos assigns each repo a sort position: repos holding a live session
 // first, then by their most recent activity, with the key breaking ties so the
 // order is stable across loads. Recency is compared at groupRecencyBucket

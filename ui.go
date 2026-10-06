@@ -285,6 +285,7 @@ type model struct {
 	project            string                  // limit the index to this project cwd; "" is no limit
 	branch             string                  // limit the index to this branch; "" is no limit
 	liveOnly           bool                    // limit the index to sessions with a running claude process
+	ageWindow          time.Duration           // limit the index to sessions active within this window; 0 = all
 	input              textinput.Model         // line editor backing the search and text prompts
 	searching          bool                    // the search prompt is open and capturing keys
 	unread             map[string]bool         // session IDs that finished a turn unseen
@@ -381,6 +382,7 @@ func newModel(cfg Config) model {
 		}
 	}
 	dims := cfg.SortDims()
+	ageWindow, ageWarn := cfg.FilterWithin()
 	m := model{
 		loader:             newMultiLoader(adapters, dims),
 		sortGroup:          cfg.Sort.Group,
@@ -388,6 +390,7 @@ func newModel(cfg Config) model {
 		styles:             newStyles(cfg),
 		commands:           cfg.Commands,
 		liveOnly:           cfg.Filter.Running,
+		ageWindow:          ageWindow,
 		bgExec:             cfg.Background,
 		enterBySource:      enterBySource,
 		tmuxGlyph:          cfg.Tmux.Glyph,
@@ -427,6 +430,9 @@ func newModel(cfg Config) model {
 		switchOnClick:      cfg.Mouse.ClickAction == "select-switch",
 		lastClickRow:       -1,
 		loading:            true,
+	}
+	if ageWarn != "" {
+		m.notice = ageWarn // startup warning, cleared by the next keypress
 	}
 	m.computeWidths()
 	return m
@@ -947,17 +953,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "o":
 			m.liveOnly = !m.liveOnly
 			m.applyFilter()
+		case "a":
+			m.ageWindow = nextAgeWindow(m.ageWindow)
+			m.applyFilter()
 		case "s":
 			m.setSortGroup(nextSortGroup(m.sortGroup))
 		case "esc":
-			if m.query != "" || m.project != "" || m.liveOnly {
+			if m.filterActive() {
 				m.query = ""
 				m.project = ""
-				m.liveOnly = false
-				m.applyFilter()
-			}
-			if m.branch != "" {
 				m.branch = ""
+				m.liveOnly = false
+				m.ageWindow = 0
 				m.applyFilter()
 			}
 		case "j", "down":
@@ -1320,6 +1327,12 @@ func (m *model) handleSearchKey(msg tea.KeyMsg) tea.Cmd {
 	return cmd
 }
 
+// filterActive reports whether any filter is narrowing the index: Esc has
+// something to clear, and the top bar advertises the Esc binding only then.
+func (m model) filterActive() bool {
+	return m.query != "" || m.project != "" || m.branch != "" || m.liveOnly || m.ageWindow != 0
+}
+
 // applyFilter rebuilds the visible list from the full one, keeps the cursor
 // on the same session where possible, and refreshes the status counts.
 func (m *model) applyFilter() {
@@ -1328,7 +1341,12 @@ func (m *model) applyFilter() {
 		selectedID = m.sessions[m.cursor].ID
 	}
 	m.sessions = m.all
-	if q := strings.ToLower(m.query); q != "" || m.project != "" || m.branch != "" || m.liveOnly {
+	if m.filterActive() {
+		q := strings.ToLower(m.query)
+		var ageCutoff time.Time
+		if m.ageWindow > 0 {
+			ageCutoff = m.currentTime().Add(-m.ageWindow)
+		}
 		m.sessions = nil
 		for _, s := range m.all {
 			if m.liveOnly && !s.Live() {
@@ -1339,6 +1357,13 @@ func (m *model) applyFilter() {
 			}
 			if m.branch != "" && s.Branch != m.branch {
 				continue
+			}
+			// The window never hides a live session (a long-running one may
+			// have no recent entry) or one of unknown age (When is zero).
+			if m.ageWindow > 0 && !s.Live() {
+				if w := s.When(); !w.IsZero() && w.Before(ageCutoff) {
+					continue
+				}
 			}
 			displayModel := strings.ToLower(m.displayModel(s))
 			if q != "" && !s.matches(q) && !strings.Contains(displayModel, q) {
@@ -1374,6 +1399,9 @@ func (m *model) applyFilter() {
 	}
 	if m.liveOnly {
 		parts = append(parts, "running only")
+	}
+	if label := ageWindowLabel(m.ageWindow); label != "" {
+		parts = append(parts, label)
 	}
 	// The sort mode is only worth showing once it differs from the configured
 	// order; the default status bar then stays as it was.
@@ -1556,7 +1584,7 @@ func (m model) View() string {
 	}
 
 	help := "q:Quit  j/k:Move  Enter:Go  /:Search  f:Filter  o:Running  r:Refresh  ?:Help"
-	if m.query != "" || m.project != "" || m.branch != "" || m.liveOnly {
+	if m.filterActive() {
 		help = "q:Quit  j/k:Move  Enter:Go  /:Search  f:Filter  o:Running  Esc:Clear filter  r:Refresh  ?:Help"
 	}
 	if m.menu.active {
@@ -1666,7 +1694,8 @@ func (m model) helpView() string {
 		"    g / G              first / last session",
 		"    /                  search; Enter keeps the filter, Esc clears it",
 		"    f                  filter menu: p by project, b by branch (pickers)",
-		"    o                  toggle showing only sessions with a running claude process",
+		"    o                  toggle showing only sessions with a running agent process",
+		"    a                  cycle the age window: all, 7 days, 30 days",
 		"    s                  cycle the sort order: activity, repo, active,repo",
 		"    d                  move session to Trash (large sessions: type yes)",
 		mouseHelp,

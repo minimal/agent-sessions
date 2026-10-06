@@ -105,8 +105,10 @@ the `Adapter` interface plus a `[sources.<name>]` entry — see `ADAPTERS.md`.
 | `Enter` | jump to a live session's tmux pane; resume a dead session |
 | `/` | search: filter the list as you type, across all projects |
 | `f` | filter menu: `p` filters by project, `b` by branch (chosen via the picker) |
-| `s` | cycle the sort order: `activity` / `repo` / `active,repo` (the `[sort]` presets) |
-| `Esc` | clear the search and project/branch filters |
+| `o` | show only sessions with a running agent process (toggle) |
+| `a` | cycle the age window: all / last 7 days / last 30 days |
+| `s` | cycle the sort order: `activity` / `repo` / `active,repo` (the `[sort]` presets) |
+| `Esc` | clear the search, project/branch filters and age window |
 | `g` / `G` | first / last session |
 | `ctrl+d` / `ctrl+u` | half page down / up |
 | `d` | move the session to Trash after a y/n confirmation |
@@ -128,7 +130,9 @@ follow-up keys, `p` filters the list to a single project and `b` to a
 single branch, each chosen via the picker (when a project filter is active,
 the branch picker offers only that project's branches). `Esc` — or any
 unbound key — cancels the menu. The filters are shown in the status bar,
-combine with each other, and stay until `Esc` clears them.
+combine with each other, and stay until `Esc` clears them. `o` shows only
+sessions with a running agent process, and `a` cycles an age window over the
+list; live sessions always survive the window.
 
 The picker is fzf-style: just start typing to narrow the list (a
 subsequence match, so `agt` finds `agent-sessions`), move with the arrows
@@ -260,6 +264,20 @@ Press `s` to cycle the three presets at runtime; `group` above only sets the
 starting order. The status bar names the mode once it differs from the config.
 A custom value (say `"repo,active"`) is not part of the cycle: the first `s`
 restarts at the presets, losing the configured order.
+
+The `[filter]` section sets what the index starts with. `running = true`
+applies the "only running" filter on start (the `o` toggle). `within` sets a
+starting age window, compared against each session's last activity (its file
+mtime for stubs that have none); `a` cycles the window at runtime. Live
+sessions always pass the window, so a long-running session whose transcript
+has been quiet for a week stays visible. A malformed `within` shows every
+session and warns on the status bar.
+
+```toml
+[filter]
+running = false
+within  = ""      # a Go duration, e.g. "168h" for 7 days; "" shows every session
+```
 
 The `[git]` section adds an optional per-repo coloured glyph before the branch
 column, giving each repo (shared across its worktrees) a consistent colour —
