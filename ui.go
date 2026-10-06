@@ -241,73 +241,75 @@ const (
 )
 
 type model struct {
-	loader         *multiLoader
-	styles         styles
-	bgExec         bool              // run key-bound commands detached (no terminal takeover)
-	enterBySource  map[string]string // per-source override of the "enter" command (key = Source)
-	tmuxGlyph      string            // marker for tmux-attachable sessions; "" hides it
-	bgGlyph        string            // marker for detached `claude --background` sessions; "" hides it
-	agentGlyphs    map[string]string // marker keyed by Session.Source
-	agentStyles    map[string]lipgloss.Style
-	colAgentGlyph  int    // display width reserved for the widest source glyph
-	worktreeGlyph  string // marker for worktree projects; "" hides the slot entirely
-	glyphs         map[marker]string
-	colGlyph       int                               // display width reserved for the status glyph
-	showWords      bool                              // show the state word next to the glyph
-	dirIcon        string                            // glyph before the project column; "" hides it
-	branchIcon     string                            // glyph before the branch column; "" hides it
-	gitIcon        string                            // per-repo glyph before the branch column; "" hides it
-	repoColors     []lipgloss.TerminalColor          // palette cycled per repo for the git icon
-	dirNameOnly    bool                              // show just the directory name, not the full path
-	modelReplacer  *strings.Replacer                 // shortens displayed model names; nil leaves them unchanged
-	selColors      bool                              // keep colours on the cursor row
-	selStatusColor bool                              // keep status marker/word coloured in reverse mode
-	selStatusFg    map[marker]lipgloss.TerminalColor // per-status text-colour overrides for the reversed row
-	selBG          lipgloss.TerminalColor            // highlight bg for the cursor row; nil = none
-	cursorHidden   bool                              // hide the cursor highlight until the next key/focus
-	previewMode    previewMode                       // how to show each session's last message
-	previewRecent  int                               // max recent sessions to always preview (row mode)
-	previewWithin  time.Duration
-	commands       map[string]string // key name -> command template
-	quickTrashMax  int64             // transcript bytes allowed to use the y/n Trash prompt
-	showCtx        bool              // [ctx].enabled
-	ciToken        string            // "" disables the CI column
-	ciSlugs        map[string]string // cwd -> CircleCI project slug ("" = none)
-	colCfg         ColumnBounds      // per-column width bounds from [columns]
-	widths         widths            // computed column widths for m.sessions
-	ci             map[string]ciEntry
-	ciPending      map[string]time.Time // slug@branch (or cwd@branch) in flight
-	all            []Session            // every session, unfiltered
-	sessions       []Session            // what the index shows: all, limited by query/project/branch
-	query          string
-	project        string                  // limit the index to this project cwd; "" is no limit
-	branch         string                  // limit the index to this branch; "" is no limit
-	liveOnly       bool                    // limit the index to sessions with a running claude process
-	input          textinput.Model         // line editor backing the search and text prompts
-	searching      bool                    // the search prompt is open and capturing keys
-	unread         map[string]bool         // session IDs that finished a turn unseen
-	seen           map[string]SessionState // last observed live state, for transitions
-	runningTimer   runningTimerConfig
-	runningSince   map[sessionKey]time.Time // first observation of the current running interval
-	now            func() time.Time         // replaceable clock for elapsed-time tests
-	spin           int                      // running-spinner frame index
-	spinning       bool                     // a spinner tick is scheduled
-	showHelp       bool
-	helpOffset     int // scroll position within the help screen
-	deleting       *trashConfirmation
-	picker         pickerState
-	menu           menuState
-	prompt         promptState
-	switchOnClick  bool      // a single left click switches, not just selects
-	lastClickRow   int       // session index of the previous left click
-	lastClickAt    time.Time // when the previous left click happened
-	cursor         int
-	offset         int
-	width          int
-	height         int
-	loading        bool // a Load is in flight; don't start another
-	status         string
-	notice         string // shown instead of status until the next keypress
+	loader             *multiLoader
+	styles             styles
+	bgExec             bool              // run key-bound commands detached (no terminal takeover)
+	enterBySource      map[string]string // per-source override of the "enter" command (key = Source)
+	tmuxGlyph          string            // marker for tmux-attachable sessions; "" hides it
+	bgGlyph            string            // marker for detached `claude --background` sessions; "" hides it
+	agentGlyphs        map[string]string // marker keyed by Session.Source
+	agentStyles        map[string]lipgloss.Style
+	colAgentGlyph      int    // display width reserved for the widest source glyph
+	worktreeGlyph      string // marker for worktree projects; "" hides the slot entirely
+	glyphs             map[marker]string
+	colGlyph           int                               // display width reserved for the status glyph
+	showWords          bool                              // show the state word next to the glyph
+	dirIcon            string                            // glyph before the project column; "" hides it
+	branchIcon         string                            // glyph before the branch column; "" hides it
+	gitIcon            string                            // per-repo glyph before the branch column; "" hides it
+	repoColors         []lipgloss.TerminalColor          // palette cycled per repo for the git icon
+	dirNameOnly        bool                              // show just the directory name, not the full path
+	modelReplacer      *strings.Replacer                 // shortens displayed model names; nil leaves them unchanged
+	selColors          bool                              // keep colours on the cursor row
+	selStatusColor     bool                              // keep status marker/word coloured in reverse mode
+	selStatusFg        map[marker]lipgloss.TerminalColor // per-status text-colour overrides for the reversed row
+	selBG              lipgloss.TerminalColor            // highlight bg for the cursor row; nil = none
+	cursorHidden       bool                              // hide the cursor highlight until the next key/focus
+	previewMode        previewMode                       // how to show each session's last message
+	previewRecent      int                               // max recent sessions to always preview (row mode)
+	previewWithin      time.Duration
+	commands           map[string]string // key name -> command template
+	quickTrashMax      int64             // transcript bytes allowed to use the y/n Trash prompt
+	showCtx            bool              // [ctx].enabled
+	ciToken            string            // "" disables the CI column
+	ciSlugs            map[string]string // cwd -> CircleCI project slug ("" = none)
+	colCfg             ColumnBounds      // per-column width bounds from [columns]
+	widths             widths            // computed column widths for m.sessions
+	ci                 map[string]ciEntry
+	ciPending          map[string]time.Time // slug@branch (or cwd@branch) in flight
+	sortGroup          string               // index ordering in effect; 's' cycles the presets
+	configuredSortDims []sortDim            // [sort] group parsed at startup; the status part shows only a different mode
+	all                []Session            // every session, unfiltered
+	sessions           []Session            // what the index shows: all, limited by query/project/branch
+	query              string
+	project            string                  // limit the index to this project cwd; "" is no limit
+	branch             string                  // limit the index to this branch; "" is no limit
+	liveOnly           bool                    // limit the index to sessions with a running claude process
+	input              textinput.Model         // line editor backing the search and text prompts
+	searching          bool                    // the search prompt is open and capturing keys
+	unread             map[string]bool         // session IDs that finished a turn unseen
+	seen               map[string]SessionState // last observed live state, for transitions
+	runningTimer       runningTimerConfig
+	runningSince       map[sessionKey]time.Time // first observation of the current running interval
+	now                func() time.Time         // replaceable clock for elapsed-time tests
+	spin               int                      // running-spinner frame index
+	spinning           bool                     // a spinner tick is scheduled
+	showHelp           bool
+	helpOffset         int // scroll position within the help screen
+	deleting           *trashConfirmation
+	picker             pickerState
+	menu               menuState
+	prompt             promptState
+	switchOnClick      bool      // a single left click switches, not just selects
+	lastClickRow       int       // session index of the previous left click
+	lastClickAt        time.Time // when the previous left click happened
+	cursor             int
+	offset             int
+	width              int
+	height             int
+	loading            bool // a Load is in flight; don't start another
+	status             string
+	notice             string // shown instead of status until the next keypress
 }
 
 func newModel(cfg Config) model {
@@ -378,50 +380,53 @@ func newModel(cfg Config) model {
 			agentStyles[source] = lipgloss.NewStyle().Foreground(lipgloss.Color(color))
 		}
 	}
+	dims := cfg.SortDims()
 	m := model{
-		loader:         newMultiLoader(adapters, cfg.SortDims()),
-		styles:         newStyles(cfg),
-		commands:       cfg.Commands,
-		liveOnly:       cfg.Filter.Running,
-		bgExec:         cfg.Background,
-		enterBySource:  enterBySource,
-		tmuxGlyph:      cfg.Tmux.Glyph,
-		bgGlyph:        cfg.Bg.Glyph,
-		agentGlyphs:    agentGlyphs,
-		agentStyles:    agentStyles,
-		colAgentGlyph:  agentGlyphWidth(agentGlyphs),
-		worktreeGlyph:  cfg.Worktree.Glyph,
-		glyphs:         glyphs,
-		colGlyph:       glyphWidth(glyphs),
-		showWords:      cfg.Status.Words,
-		dirIcon:        cfg.Icons.Dir,
-		branchIcon:     cfg.Icons.Branch,
-		gitIcon:        cfg.Git.Icon,
-		repoColors:     repoPalette(cfg.Git.Colors),
-		dirNameOnly:    cfg.Display.Project == "name",
-		modelReplacer:  newModelReplacer(cfg.Display.ModelReplacements),
-		selColors:      cfg.Selection.Colors,
-		selStatusColor: cfg.Selection.StatusColor,
-		selStatusFg:    selStatusFg,
-		selBG:          selBG,
-		previewMode:    mode,
-		previewRecent:  cfg.Preview.Recent,
-		previewWithin:  cfg.PreviewWithin(),
-		quickTrashMax:  cfg.QuickTrashThresholdBytes,
-		showCtx:        cfg.Ctx.Enabled,
-		ciToken:        cfg.ciToken(),
-		ciSlugs:        cfg.ciOverrides(),
-		colCfg:         cfg.Columns,
-		ci:             map[string]ciEntry{},
-		ciPending:      map[string]time.Time{},
-		unread:         map[string]bool{},
-		seen:           map[string]SessionState{},
-		runningTimer:   cfg.runningTimer(),
-		runningSince:   map[sessionKey]time.Time{},
-		now:            time.Now,
-		switchOnClick:  cfg.Mouse.ClickAction == "select-switch",
-		lastClickRow:   -1,
-		loading:        true,
+		loader:             newMultiLoader(adapters, dims),
+		sortGroup:          cfg.Sort.Group,
+		configuredSortDims: dims,
+		styles:             newStyles(cfg),
+		commands:           cfg.Commands,
+		liveOnly:           cfg.Filter.Running,
+		bgExec:             cfg.Background,
+		enterBySource:      enterBySource,
+		tmuxGlyph:          cfg.Tmux.Glyph,
+		bgGlyph:            cfg.Bg.Glyph,
+		agentGlyphs:        agentGlyphs,
+		agentStyles:        agentStyles,
+		colAgentGlyph:      agentGlyphWidth(agentGlyphs),
+		worktreeGlyph:      cfg.Worktree.Glyph,
+		glyphs:             glyphs,
+		colGlyph:           glyphWidth(glyphs),
+		showWords:          cfg.Status.Words,
+		dirIcon:            cfg.Icons.Dir,
+		branchIcon:         cfg.Icons.Branch,
+		gitIcon:            cfg.Git.Icon,
+		repoColors:         repoPalette(cfg.Git.Colors),
+		dirNameOnly:        cfg.Display.Project == "name",
+		modelReplacer:      newModelReplacer(cfg.Display.ModelReplacements),
+		selColors:          cfg.Selection.Colors,
+		selStatusColor:     cfg.Selection.StatusColor,
+		selStatusFg:        selStatusFg,
+		selBG:              selBG,
+		previewMode:        mode,
+		previewRecent:      cfg.Preview.Recent,
+		previewWithin:      cfg.PreviewWithin(),
+		quickTrashMax:      cfg.QuickTrashThresholdBytes,
+		showCtx:            cfg.Ctx.Enabled,
+		ciToken:            cfg.ciToken(),
+		ciSlugs:            cfg.ciOverrides(),
+		colCfg:             cfg.Columns,
+		ci:                 map[string]ciEntry{},
+		ciPending:          map[string]time.Time{},
+		unread:             map[string]bool{},
+		seen:               map[string]SessionState{},
+		runningTimer:       cfg.runningTimer(),
+		runningSince:       map[sessionKey]time.Time{},
+		now:                time.Now,
+		switchOnClick:      cfg.Mouse.ClickAction == "select-switch",
+		lastClickRow:       -1,
+		loading:            true,
 	}
 	m.computeWidths()
 	return m
@@ -942,6 +947,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "o":
 			m.liveOnly = !m.liveOnly
 			m.applyFilter()
+		case "s":
+			m.setSortGroup(nextSortGroup(m.sortGroup))
 		case "esc":
 			if m.query != "" || m.project != "" || m.liveOnly {
 				m.query = ""
@@ -1341,11 +1348,9 @@ func (m *model) applyFilter() {
 		}
 	}
 	m.cursor = min(m.cursor, m.lastRow())
+	m.selectSession(selectedID)
 	counts := map[SessionState]int{}
-	for i, s := range m.sessions {
-		if s.ID == selectedID {
-			m.cursor = i
-		}
+	for _, s := range m.sessions {
 		if s.Live() {
 			counts[s.State]++
 		}
@@ -1370,8 +1375,46 @@ func (m *model) applyFilter() {
 	if m.liveOnly {
 		parts = append(parts, "running only")
 	}
+	// The sort mode is only worth showing once it differs from the configured
+	// order; the default status bar then stays as it was.
+	if m.sortGroup != "" && !sameSortDims(parseSortDims(m.sortGroup), m.configuredSortDims) {
+		parts = append(parts, "sorted by "+m.sortGroup)
+	}
 	m.status = strings.Join(parts, ", ")
 	m.computeWidths()
+}
+
+// selectSession moves the cursor onto the session with the given id, leaving
+// the position alone when the session is not visible.
+func (m *model) selectSession(id string) {
+	if id == "" {
+		return
+	}
+	for i, s := range m.sessions {
+		if s.ID == id {
+			m.cursor = i
+			return
+		}
+	}
+}
+
+// setSortGroup switches the index ordering and re-sorts the loaded list in
+// place -- sorting only needs fields Load already fills, so no reload is
+// needed. The loader's dimensions follow, so the next periodic reload keeps
+// the user's choice instead of reverting to the configured order, and the
+// cursor stays on the session it was on.
+func (m *model) setSortGroup(group string) {
+	var selectedID string
+	if m.cursor < len(m.sessions) {
+		selectedID = m.sessions[m.cursor].ID
+	}
+	m.sortGroup = group
+	if m.loader != nil {
+		m.loader.sortDims = parseSortDims(group)
+	}
+	sortSessions(m.all, parseSortDims(group))
+	m.applyFilter()
+	m.selectSession(selectedID)
 }
 
 // ciFetchCmd starts a background fetch of CI statuses for visible rows
@@ -1624,6 +1667,7 @@ func (m model) helpView() string {
 		"    /                  search; Enter keeps the filter, Esc clears it",
 		"    f                  filter menu: p by project, b by branch (pickers)",
 		"    o                  toggle showing only sessions with a running claude process",
+		"    s                  cycle the sort order: activity, repo, active,repo",
 		"    d                  move session to Trash (large sessions: type yes)",
 		mouseHelp,
 		"    r                  refresh now",

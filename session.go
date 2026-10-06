@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -177,6 +178,32 @@ func parseSortDims(group string) []sortDim {
 		}
 	}
 	return dims
+}
+
+// sortPresets are the [sort] group values the 's' key cycles through, in the
+// order the docs list them. "activity" is the plain recency order (no
+// dimension); the others cluster a repo's sessions.
+var sortPresets = []string{"activity", "repo", "active,repo"}
+
+// sameSortDims reports whether two dimension lists order the index the same
+// way, so a config spelling variant like "active, repo" matches the
+// "active,repo" preset.
+func sameSortDims(a, b []sortDim) bool {
+	return slices.Equal(a, b)
+}
+
+// nextSortGroup returns the preset after group in the cycle. group is matched
+// after parsing, so spelling variants of a preset count. A custom or unknown
+// value starts the cycle at the first preset (plain recency), so its
+// configured order is lost on the first press.
+func nextSortGroup(group string) string {
+	dims := parseSortDims(group)
+	for i, preset := range sortPresets {
+		if sameSortDims(parseSortDims(preset), dims) {
+			return sortPresets[(i+1)%len(sortPresets)]
+		}
+	}
+	return sortPresets[1]
 }
 
 // byRecency orders two sessions newest-first: live ahead of the rest, then by

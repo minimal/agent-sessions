@@ -153,6 +153,10 @@ glyph = "wt"
 #                  finished — so a busy repo's backlog never buries another
 #                  repo's active work.
 #   "activity"     (default) newest first, live floated to the top.
+# Press 's' in the TUI to cycle these presets at runtime; group above only sets
+# the starting order. The status bar names the mode once it differs from this
+# value. A custom list ("repo,active") is not part of the cycle: the first press
+# restarts at the presets, losing the custom order.
 group = "activity"
 
 [filter]

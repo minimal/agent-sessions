@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -142,6 +143,119 @@ func TestParseSortDims(t *testing.T) {
 				break
 			}
 		}
+	}
+}
+
+func TestSameSortDims(t *testing.T) {
+	if !sameSortDims(parseSortDims("active, repo"), parseSortDims("ACTIVE,REPO")) {
+		t.Error("spelling variants of a dimension list should compare equal")
+	}
+	if sameSortDims(parseSortDims("active,repo"), parseSortDims("repo")) {
+		t.Error("different dimension lists should not compare equal")
+	}
+}
+
+func TestNextSortGroup(t *testing.T) {
+	cases := map[string]string{
+		"activity":     "repo",
+		"repo":         "active,repo",
+		"active,repo":  "activity",
+		"active, repo": "activity", // spelling variants match a preset
+		"ACTIVE,REPO":  "activity",
+		"":             "repo", // no [sort] section: plain recency seeds as activity
+		"repo,active":  "repo", // custom order: the cycle restarts at activity
+		"live":         "repo", // the alias is not one of the three documented presets
+		"garbage":      "repo",
+	}
+	for in, want := range cases {
+		if got := nextSortGroup(in); got != want {
+			t.Errorf("nextSortGroup(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// sortKeyFixtures separates all three presets: plain recency interleaves the
+// finished sessions of different repos, plain repo grouping keeps each repo
+// together (repos ordered by their newest activity), and active,repo floats
+// both live sessions above the finished ones.
+func sortKeyFixtures() []Session {
+	return []Session{
+		{ID: "z-live", Repo: "Z", Activity: at(-100), Modified: at(-100), PID: 1},
+		{ID: "z-done", Repo: "Z", Activity: at(-2), Modified: at(-2)},
+		{ID: "a-done", Repo: "A", Activity: at(-3), Modified: at(-3)},
+		{ID: "y-live", Repo: "Y", Activity: at(-90), Modified: at(-90), PID: 2},
+		{ID: "y-done", Repo: "Y", Activity: at(-4), Modified: at(-4)},
+	}
+}
+
+func TestSortKeyCyclesPresets(t *testing.T) {
+	m := model{all: sortKeyFixtures(), sortGroup: "activity", configuredSortDims: parseSortDims("activity")}
+	m.sessions = m.all
+	steps := []struct {
+		preset string
+		want   []string
+	}{
+		{"repo", []string{"z-live", "z-done", "y-live", "y-done", "a-done"}},
+		{"active,repo", []string{"z-live", "y-live", "z-done", "y-done", "a-done"}},
+		{"activity", []string{"y-live", "z-live", "z-done", "a-done", "y-done"}},
+	}
+	for _, step := range steps {
+		mm, _ := m.Update(key("s"))
+		m = mm.(model)
+		if m.sortGroup != step.preset {
+			t.Fatalf("s should cycle to %q, got %q", step.preset, m.sortGroup)
+		}
+		if got := order(m.sessions); !equalStrings(got, step.want) {
+			t.Errorf("after s -> %q: %v, want %v", step.preset, got, step.want)
+		}
+	}
+}
+
+func TestSortKeyKeepsLoaderDims(t *testing.T) {
+	m := model{
+		loader:             newMultiLoader(nil, parseSortDims("activity")),
+		all:                sortKeyFixtures(),
+		sortGroup:          "activity",
+		configuredSortDims: parseSortDims("activity"),
+	}
+	m.sessions = m.all
+	mm, _ := m.Update(key("s"))
+	m = mm.(model)
+	if got := m.loader.sortDims; !sameSortDims(got, parseSortDims("repo")) {
+		t.Errorf("loader dims after s = %v, want the repo dims so a reload keeps the choice", got)
+	}
+}
+
+// TestSortKeyKeepsCursorOnSession pins the selection across a re-sort: the
+// bottom row under plain recency moves up when repo grouping applies.
+func TestSortKeyKeepsCursorOnSession(t *testing.T) {
+	m := model{all: sortKeyFixtures(), sortGroup: "activity"}
+	m.sessions = m.all
+	m.cursor = len(m.sessions) - 1
+	want := m.sessions[m.cursor].ID
+	mm, _ := m.Update(key("s"))
+	m = mm.(model)
+	if got := m.sessions[m.cursor].ID; got != want {
+		t.Errorf("cursor should stay on %q, got %q", want, got)
+	}
+}
+
+func TestSortStatusPart(t *testing.T) {
+	m := model{all: sortKeyFixtures(), sortGroup: "activity", configuredSortDims: parseSortDims("activity")}
+	m.sessions = m.all
+	m.applyFilter()
+	if strings.Contains(m.status, "sorted by") {
+		t.Errorf("the configured order should not add a status part, got %q", m.status)
+	}
+	m.setSortGroup("repo")
+	if !strings.Contains(m.status, "sorted by repo") {
+		t.Errorf("status should name the runtime order, got %q", m.status)
+	}
+	// A spelling variant of the configured preset is the same mode.
+	m.configuredSortDims = parseSortDims("active, repo")
+	m.setSortGroup("active,repo")
+	if strings.Contains(m.status, "sorted by") {
+		t.Errorf("a spelling variant of the configured mode should not add a part, got %q", m.status)
 	}
 }
 

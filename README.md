@@ -105,6 +105,7 @@ the `Adapter` interface plus a `[sources.<name>]` entry — see `ADAPTERS.md`.
 | `Enter` | jump to a live session's tmux pane; resume a dead session |
 | `/` | search: filter the list as you type, across all projects |
 | `f` | filter menu: `p` filters by project, `b` by branch (chosen via the picker) |
+| `s` | cycle the sort order: `activity` / `repo` / `active,repo` (the `[sort]` presets) |
 | `Esc` | clear the search and project/branch filters |
 | `g` / `G` | first / last session |
 | `ctrl+d` / `ctrl+u` | half page down / up |
@@ -254,6 +255,11 @@ sessions: with plain `repo` that backlog sits in the repo's block and can push
 another repo's live session far down the list, whereas `active,repo` surfaces
 every live session first (still grouped by repo) and lets the finished ones sink
 behind all of them.
+
+Press `s` to cycle the three presets at runtime; `group` above only sets the
+starting order. The status bar names the mode once it differs from the config.
+A custom value (say `"repo,active"`) is not part of the cycle: the first `s`
+restarts at the presets, losing the configured order.
 
 The `[git]` section adds an optional per-repo coloured glyph before the branch
 column, giving each repo (shared across its worktrees) a consistent colour —
