@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -104,6 +105,50 @@ func TestTmuxCurrentSession(t *testing.T) {
 		if got := tmuxCurrentSession(); got != c.want {
 			t.Errorf("tmuxCurrentSession() with TMUX=%q = %q, want %q", c.tmux, got, c.want)
 		}
+	}
+}
+
+// TestSoleAttachedIgnoresPaneCount is the guard for a bug this shipped with.
+// tmux repeats session_attached on every pane line of a session, so counting it
+// per line made "the only attached session" depend on that session having an
+// odd number of panes: an even-pane session left no answer and its chip was
+// never marked. Both counts below belong to one attached session.
+func TestSoleAttachedIgnoresPaneCount(t *testing.T) {
+	for _, panes := range []int{1, 2, 3, 4, 5, 6} {
+		var b strings.Builder
+		b.WriteString("$1\twork\t1\t%1\twork:0.0\t1\t1\t0\t1\t/dev/pts/1\n")
+		for i := 2; i <= panes; i++ {
+			fmt.Fprintf(&b, "$1\twork\t1\t%%%d\twork:0.%d\t1\t0\t0\t1\t/dev/pts/1\n", i, i)
+		}
+		// A second session with no client, so it must not become the answer.
+		b.WriteString("$2\tother\t1\t%90\tother:0.0\t0\t1\t0\t1\t/dev/pts/2\n")
+
+		srv := parseTmuxPanes(b.String())
+		if srv.attached != "$1" {
+			t.Errorf("an attached session with %d panes should be the answer, got %q", panes, srv.attached)
+		}
+	}
+}
+
+// TestSoleAttachedNeedsExactlyOneSession covers the other half: the fallback is
+// only a stand-in for identity, so it declines when the answer is ambiguous.
+func TestSoleAttachedNeedsExactlyOneSession(t *testing.T) {
+	two := "$1\tone\t1\t%1\tone:0.0\t1\t1\t0\t1\t/dev/pts/1\n" +
+		"$2\ttwo\t1\t%2\ttwo:0.0\t1\t1\t0\t1\t/dev/pts/2\n"
+	if got := parseTmuxPanes(two).attached; got != "" {
+		t.Errorf("two attached sessions should give no single answer, got %q", got)
+	}
+	none := "$1\tone\t1\t%1\tone:0.0\t0\t1\t0\t1\t/dev/pts/1\n"
+	if got := parseTmuxPanes(none).attached; got != "" {
+		t.Errorf("no attached session should give no answer, got %q", got)
+	}
+	// The same session reported on several lines is still one session.
+	one := "$1\tone\t3\t%1\tone:0.0\t1\t1\t0\t1\t/dev/pts/1\n" +
+		"$1\tone\t3\t%2\tone:1.0\t1\t0\t0\t1\t/dev/pts/1\n" +
+		"$1\tone\t3\t%3\tone:2.0\t1\t0\t0\t1\t/dev/pts/1\n" +
+		"$1\tone\t3\t%4\tone:2.1\t1\t0\t0\t1\t/dev/pts/1\n"
+	if got := parseTmuxPanes(one).attached; got != "$1" {
+		t.Errorf("one attached session over four lines is still one session, got %q", got)
 	}
 }
 

@@ -59,7 +59,13 @@ type tmuxServer struct {
 	// launcher such as agent-dashboard hands it a $TMUX with the session field
 	// blanked. Several attached sessions means there is no single answer, so
 	// nothing is claimed.
-	attached string
+	//
+	// attachedID and attachedSessions are the raw tallies it is derived from:
+	// tmux repeats session_attached on every pane line, so counting per line
+	// would make this depend on a session's pane count being odd or even.
+	attachedID       string
+	attachedSessions int
+	attached         string
 }
 
 // pollTmux reads the server in one list-panes call: every pane carries its
@@ -105,6 +111,11 @@ func tmuxListPanes() *exec.Cmd {
 func parseTmuxPanes(out string) *tmuxServer {
 	srv := &tmuxServer{byPane: map[string]tmuxPane{}, onScreen: map[string]bool{}}
 	seen := map[string]bool{}
+	defer func() {
+		if srv.attachedSessions == 1 {
+			srv.attached = srv.attachedID
+		}
+	}()
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		// The tenth column (pane_tty) is optional: an older or hand-written
 		// fixture without it still parses, and a pane with no tty is simply one
@@ -123,6 +134,14 @@ func parseTmuxPanes(out string) *tmuxServer {
 			seen[id] = true
 			n, _ := strconv.Atoi(windows)
 			srv.sessions = append(srv.sessions, tmuxSession{id: id, name: name, windows: n})
+			// session_attached is repeated on every one of the session's pane
+			// lines, so it is counted once per SESSION, on its first line.
+			// Counting it per line would make the answer depend on the session's
+			// pane count being odd or even.
+			if clients, _ := strconv.Atoi(attached); clients > 0 {
+				srv.attachedSessions++
+				srv.attachedID = id
+			}
 		}
 		pane := tmuxPane{id: paneID, name: paneName, session: name, sessionID: id, tty: tty}
 		srv.byPane[paneID] = pane
@@ -131,13 +150,6 @@ func parseTmuxPanes(out string) *tmuxServer {
 		// pane unless the Window is zoomed -- and a zoomed Window shows only the
 		// focused pane.
 		clients, _ := strconv.Atoi(attached)
-		if clients > 0 {
-			if srv.attached != "" {
-				srv.attached = "" // more than one: no single answer
-			} else {
-				srv.attached = id
-			}
-		}
 		if clients > 0 && active == "1" && (zoomed != "1" || focused == "1") {
 			srv.onScreen[paneID] = true
 			srv.onScreen[paneName] = true
