@@ -1741,6 +1741,7 @@ type tmuxChipAgent struct {
 
 // tmuxChip is one Tmux Session in the Tmux Bar.
 type tmuxChip struct {
+	ID      string // $N, the Jump's session target
 	Name    string
 	Windows int
 	Current bool
@@ -1775,6 +1776,7 @@ func (m model) tmuxChips() []tmuxChip {
 	for _, s := range m.tmuxSrv.sessions {
 		index[s.name] = len(chips)
 		chips = append(chips, tmuxChip{
+			ID:      s.id,
 			Name:    s.name,
 			Windows: s.windows,
 			Current: s.id != "" && s.id == m.tmuxSrv.current,
@@ -1937,26 +1939,30 @@ func (m model) tmuxChipAt(x int) (tmuxChip, bool) {
 	return tmuxChip{}, false
 }
 
-// tmuxJumpTarget returns the Pane a Jump selects and the agent session it
-// belongs to: the first waiting agent, else the first Unread one, because
-// waiting is blocked on the user now. Both empty means no agent on the chip
-// wants the user, so the Jump leaves tmux on the session's last-active Window.
-func tmuxJumpTarget(c tmuxChip) (pane, sessionID string) {
+// tmuxJumpTarget returns the agent a Jump diverts to, if any: the first waiting
+// agent, else the first Unread one, because waiting is blocked on the user now.
+// No such agent means the Jump leaves tmux on the session's last-active Window.
+func tmuxJumpTarget(c tmuxChip) (tmuxChipAgent, bool) {
 	for _, a := range c.Agents {
 		if a.Waiting && a.Pane != "" {
-			return a.Pane, a.ID
+			return a, true
 		}
 	}
 	for _, a := range c.Agents {
 		if a.Unread && a.Pane != "" {
-			return a.Pane, a.ID
+			return a, true
 		}
 	}
-	return "", ""
+	return tmuxChipAgent{}, false
 }
 
 // tmuxJumpVars are the Jump template's placeholders: the Tmux Session to switch
 // to, and the Pane to select first (empty when the Jump does not divert).
+//
+// The session is passed as its id ($N), not its name: tmux reads a name
+// containing ':' as session:window, so `-t x:y` fails with "can't find session:
+// x", while an id addresses every session (x:y is a real name tmux allows, and
+// the fixtures keep one).
 func tmuxJumpVars(session, pane string) map[string]string {
 	return map[string]string{
 		"tmux-session": session,
@@ -1968,17 +1974,23 @@ func tmuxJumpVars(session, pane string) map[string]string {
 // jumpTmux moves the terminal to a Tmux Session: the Pane of an agent that
 // wants the user when there is one, otherwise tmux's own last-active Window.
 // It is a [commands] tmux template, so it stays configurable, and it reads the
-// agent session it lands on — and only that one. A chip with no Attention agent
-// lands on a Window whose agents are already read, so there is nothing to clear.
+// agent session it lands on — and only that one.
+//
+// Attention here is the Unread flag: waiting is the agent's own live state,
+// which only the agent can leave. The flag clears when the Jump is issued, as
+// Enter on a session does, and only for the agent the Jump diverts to: a chip
+// with no Attention agent lands on a Window whose agents are already read.
 func (m model) jumpTmux(c tmuxChip) (tea.Model, tea.Cmd) {
 	if m.tmuxJump == "" {
 		return m, nil // [commands] tmux = "" unbinds the Jump, click included
 	}
-	pane, id := tmuxJumpTarget(c)
-	delete(m.unread, id) // a Jump reads what it lands on; delete of "" is a no-op
+	target, diverts := tmuxJumpTarget(c)
+	if diverts {
+		delete(m.unread, target.ID)
+	}
 	m.notice = ""
 	m.cursorHidden = true // hide the highlight until the next key or focus
-	return m, execCmd(m.tmuxJump, tmuxJumpVars(c.Name, pane), m.bgExec)
+	return m, execCmd(m.tmuxJump, tmuxJumpVars(c.ID, target.Pane), m.bgExec)
 }
 
 // tmuxPicker asks which Tmux Session to Jump to, over the same sessions the Bar
@@ -2074,6 +2086,12 @@ func (m model) helpView() string {
 		lines = append(lines, fmt.Sprintf(
 			"    %-18s jump to a tmux session (picker, Attention first)", m.tmuxKey))
 	}
+	// The Jump template is not a key binding -- a chip click runs it too -- so it
+	// is named here instead of in the [commands] key list below.
+	if m.tmuxJump != "" {
+		lines = append(lines, fmt.Sprintf(
+			"    %-18s the Jump template a chip click or the key runs", "[commands] tmux"))
+	}
 	lines = append(lines,
 		"    d                  move session to Trash (large sessions: type yes)",
 		mouseHelp,
@@ -2122,8 +2140,8 @@ func (m model) helpView() string {
 		"    {pid}               pid of the running claude process (live only)",
 		"    {pane}              tmux pane hosting the process (live, in tmux)",
 		"    {jobid}             id for `claude attach`/`stop` (live, --background only)",
-		"    {tmux-session}      Tmux Session a chip's Jump switches to ([commands] tmux)",
-		"    {tmux-target?}      Pane that Jump selects first; empty when none wants you",
+		"    {tmux-session}      tmux session id ($N) a chip's Jump switches to",
+		"    {tmux-target} / {tmux-target?}   pane the Jump selects first; empty when none wants you",
 		"    {pid?} / {pane?} / {jobid?}   optional forms: expand empty instead of blocking",
 		"    {ci-build-url}      the latest CircleCI build's page (needs [circleci])",
 		"    {project-picker}    asks: pick a project from every known one",
@@ -2133,9 +2151,10 @@ func (m model) helpView() string {
 	lines = append(lines, "  Commands (from config)")
 	keys := make([]string, 0, len(m.commands))
 	for k, tmpl := range m.commands {
-		if tmpl != "" {
-			keys = append(keys, k)
+		if tmpl == "" || k == "tmux" {
+			continue // "" unbinds the binding; tmux is the Jump template, named above
 		}
+		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	for _, k := range keys {

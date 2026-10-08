@@ -79,6 +79,7 @@ func parseTmuxPanes(out string) *tmuxServer {
 			continue
 		}
 		id, name, windows, paneID, paneName := fields[0], fields[1], fields[2], fields[3], fields[4]
+		attached, active, zoomed, focused := fields[5], fields[6], fields[7], fields[8]
 		if !seen[id] {
 			seen[id] = true
 			n, _ := strconv.Atoi(windows)
@@ -90,8 +91,8 @@ func parseTmuxPanes(out string) *tmuxServer {
 		// An attached client sees its session's current Window, which shows every
 		// pane unless the Window is zoomed -- and a zoomed Window shows only the
 		// focused pane.
-		clients, _ := strconv.Atoi(fields[5])
-		if clients > 0 && fields[6] == "1" && (fields[7] != "1" || fields[8] == "1") {
+		clients, _ := strconv.Atoi(attached)
+		if clients > 0 && active == "1" && (zoomed != "1" || focused == "1") {
 			srv.onScreen[paneID] = true
 			srv.onScreen[paneName] = true
 		}

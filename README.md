@@ -400,6 +400,8 @@ survive word-splitting.
 | `{state}` | `running`/`waiting`/`idle` for live sessions, empty otherwise |
 | `{pid}` | the pid of the session's running `claude` process |
 | `{pane}` | the tmux pane hosting the session's `claude` process |
+| `{tmux-session}` | the tmux session id (`$N`) a chip's Jump switches to |
+| `{tmux-target}` | the pane that Jump selects first; empty when no agent wants you |
 | `{ci-build-url}` | the latest CircleCI build's page (needs `[circleci]`) |
 | `{project-picker}` | interactive: the project chosen from a selection screen |
 | `{text-input}` | interactive: a line of text typed into the status bar |
@@ -408,7 +410,10 @@ survive word-splitting.
 notice instead of running when no process is attached. `{pane}` also applies
 only to a live session, but expands empty rather than blocking, so a template
 can fall back to resuming; it is a pane an adapter *verified* hosts the
-process, never one merely matching the session's cwd. Likewise
+process, never one merely matching the session's cwd. `{tmux-session}` and
+`{tmux-target}` belong to the Tmux Bar's Jump: they carry the tmux session to
+switch to and the pane to select first, and both expand empty rather than
+blocking. Likewise
 `{ci-build-url}` needs the session's project to have a known CircleCI slug;
 it deep-links to the latest fetched workflow, falling back to the branch's
 pipelines page (e.g. `b = "xdg-open {ci-build-url}"`). Appending `?`

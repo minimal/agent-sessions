@@ -1,6 +1,9 @@
 package main
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -611,9 +614,9 @@ func TestTmuxJumpTargetPicksTheAttentionAgent(t *testing.T) {
 		{"one agent with both", []tmuxChipAgent{idle, both}, "%4", "both"},
 	}
 	for _, c := range cases {
-		pane, id := tmuxJumpTarget(tmuxChip{Agents: c.agents})
-		if pane != c.pane || id != c.id {
-			t.Errorf("%s: tmuxJumpTarget = (%q, %q), want (%q, %q)", c.name, pane, id, c.pane, c.id)
+		agent, ok := tmuxJumpTarget(tmuxChip{Agents: c.agents})
+		if agent.Pane != c.pane || agent.ID != c.id || ok != (c.pane != "") {
+			t.Errorf("%s: tmuxJumpTarget = (%q, %q, %v), want (%q, %q)", c.name, agent.Pane, agent.ID, ok, c.pane, c.id)
 		}
 	}
 }
@@ -623,9 +626,9 @@ func TestTmuxJumpTargetUsesThePaneID(t *testing.T) {
 	// session:window target: the Jump uses the pane's %N id instead.
 	srv := parseTmuxPanes(tmuxPanesFixture)
 	m := barModel(t, srv, liveAgent("claude-live", "claude", "x:y:0.0", StateWaiting))
-	pane, id := tmuxJumpTarget(chipNamed(t, m, "x:y"))
-	if pane != "%19" || id != "claude-live" {
-		t.Errorf("tmuxJumpTarget = (%q, %q), want the %%19 pane and claude-live", pane, id)
+	agent, ok := tmuxJumpTarget(chipNamed(t, m, "x:y"))
+	if !ok || agent.Pane != "%19" || agent.ID != "claude-live" {
+		t.Errorf("tmuxJumpTarget = (%+v, %v), want the %%19 pane and claude-live", agent, ok)
 	}
 }
 
@@ -661,6 +664,35 @@ func TestTmuxJumpReadsOnlyTheLandedSession(t *testing.T) {
 	}
 }
 
+func TestTmuxJumpTargetsTheSessionByID(t *testing.T) {
+	srv := parseTmuxPanes(tmuxPanesFixture)
+	m := barModel(t, srv)
+	// tmux cannot address x:y by name -- `-t x:y` reads as session "x", window
+	// "y" -- so the Jump passes the session id, which addresses any name.
+	c := chipNamed(t, m, "x:y")
+	if c.ID != "$6" {
+		t.Fatalf("a chip should carry its session id, got %q", c.ID)
+	}
+	line := expandCommand(m.tmuxJump, tmuxJumpVars(c.ID, ""))
+	if !strings.Contains(line, "'$6'") {
+		t.Errorf("the Jump should target the session by id, got %q", line)
+	}
+}
+
+// TestTmuxSessionIDsAreValidTargets proves the target form the Jump depends on
+// against a real server: every session id resolves.
+func TestTmuxSessionIDsAreValidTargets(t *testing.T) {
+	srv := pollTmux()
+	if srv == nil || len(srv.sessions) == 0 {
+		t.Skip("no reachable tmux server")
+	}
+	for _, s := range srv.sessions {
+		if err := exec.Command("tmux", "has-session", "-t", s.id).Run(); err != nil {
+			t.Errorf("session id %s should be a valid tmux target: %v", s.id, err)
+		}
+	}
+}
+
 func TestTmuxJumpTemplateVars(t *testing.T) {
 	var cfg Config
 	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
@@ -680,14 +712,21 @@ func TestTmuxJumpTemplateVars(t *testing.T) {
 	if !strings.Contains(tmpl, "switch-client") || !strings.Contains(tmpl, "|| tmux attach") {
 		t.Errorf("the shipped Jump should switch the client, else attach, got %q", tmpl)
 	}
-	line := expandCommand(tmpl, tmuxJumpVars("agent-sessions", "%6"))
-	for _, want := range []string{"'agent-sessions'", "'%6'"} {
+	// The lines are separate, so a failed select-pane cannot short-circuit the
+	// switch: no line joins the selects to the switch with &&.
+	for _, line := range strings.Split(tmpl, "\n") {
+		if strings.Contains(line, "select-") && strings.Contains(line, "switch-client") {
+			t.Errorf("the Jump's selects and switch should be separate lines, got %q", line)
+		}
+	}
+	line := expandCommand(tmpl, tmuxJumpVars("$4", "%6"))
+	for _, want := range []string{"'$4'", "'%6'"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("the expanded Jump should contain %s, got %q", want, line)
 		}
 	}
 	// No Attention agent: the target is empty, so tmux keeps its own Window.
-	line = expandCommand(tmpl, tmuxJumpVars("agent-sessions", ""))
+	line = expandCommand(tmpl, tmuxJumpVars("$4", ""))
 	if !strings.Contains(line, "select-pane -t ''") {
 		t.Errorf("an empty target should expand empty, got %q", line)
 	}
@@ -815,7 +854,7 @@ func TestTmuxChipClickJumps(t *testing.T) {
 	}{
 		{"the gap after a chip", x - 1, barY},
 		{"the status bar", x, m.height - 1},
-		{"the help row", x, 0},
+		{"the top bar", x, 0}, // the help screen itself is inert too: handleMouse returns early
 	} {
 		m.unread = map[string]bool{"a": true}
 		mm, cmd := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: c.x, Y: c.y})
@@ -833,7 +872,7 @@ func TestTmuxJumpToADeadSessionNotices(t *testing.T) {
 	m := barModel(t, srv)
 	m.bgExec = true // run the Jump detached, so the test can wait for it
 	m.tmuxJump = "tmux switch-client -t {tmux-session} 2>/dev/null || tmux attach -t {tmux-session}"
-	_, cmd := m.jumpTmux(tmuxChip{Name: "agent-sessions-gone-xyz"})
+	_, cmd := m.jumpTmux(tmuxChip{ID: "$9999", Name: "agent-sessions-gone-xyz"})
 	if cmd == nil {
 		t.Fatal("a Jump to a dead session should still run its command")
 	}
@@ -943,5 +982,97 @@ func TestPollTmuxLiveOnScreen(t *testing.T) {
 	}
 	if srv.current == "" && len(srv.onScreen) != 0 {
 		t.Error("outside tmux, with no client, nothing can be on screen")
+	}
+}
+
+// TestJumpLandsOnTheTargetPane runs the shipped Jump's select lines against a
+// scratch tmux server, so the diversion is proved by tmux's own state instead
+// of by reading the template. The scratch socket keeps it away from the server
+// the user is on; the switch-client line needs a client, so it is not run.
+func TestJumpLandsOnTheTargetPane(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is not installed")
+	}
+	// The socket lives in the test's own temp dir, so the test leaves nothing
+	// behind in /tmp/tmux-<uid> and cannot collide with another run.
+	socket := filepath.Join(t.TempDir(), "tmux.sock")
+	scratch := func(args ...string) string {
+		t.Helper()
+		out, err := exec.Command("tmux", append([]string{"-S", socket, "-f", "/dev/null"}, args...)...).Output()
+		if err != nil {
+			t.Fatalf("tmux %v: %v", args, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	scratch("new-session", "-d", "-s", "jump-from")
+	scratch("new-session", "-d", "-s", "jump-to")
+	// The agent's pane is in a second Window, created detached, so landing there
+	// has to move the session's current Window as well as focus the pane.
+	target := scratch("new-window", "-d", "-t", "jump-to", "-P", "-F", "#{pane_id}")
+	targetWindow := scratch("display-message", "-p", "-t", target, "#{window_id}")
+	sessionID := scratch("display-message", "-p", "-t", "jump-to", "#{session_id}")
+	socketPath := scratch("display-message", "-p", "#{socket_path}")
+	defer exec.Command("tmux", "-S", socket, "kill-server").Run()
+
+	var cfg Config
+	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	jump := func(pane string) {
+		t.Helper()
+		vars := tmuxJumpVars(sessionID, pane)
+		for _, line := range strings.Split(cfg.Commands["tmux"], "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "tmux select-") {
+				continue
+			}
+			cmd := exec.Command("sh", "-c", expandCommand(line, vars))
+			cmd.Env = append(os.Environ(), "TMUX="+socketPath)
+			if out, err := cmd.CombinedOutput(); err != nil && pane != "" {
+				t.Fatalf("the Jump's %q failed: %v: %s", line, err, out)
+			}
+		}
+	}
+
+	if got := scratch("display-message", "-p", "-t", "jump-to", "#{window_id}"); got == targetWindow {
+		t.Fatalf("the fixture should start on another Window, got %q", got)
+	}
+	jump(target)
+	if got := scratch("display-message", "-p", "-t", "jump-to", "#{window_id}"); got != targetWindow {
+		t.Errorf("the Jump should make the agent's Window current, got %q want %q", got, targetWindow)
+	}
+	if got := scratch("display-message", "-p", "-t", target, "#{pane_active}"); got != "1" {
+		t.Errorf("the Jump should focus the agent's pane, got pane_active=%q", got)
+	}
+
+	// With no Attention agent the target is empty: tmux keeps its own Window.
+	scratch("select-window", "-t", "jump-to:0")
+	jump("")
+	if got := scratch("display-message", "-p", "-t", "jump-to", "#{window_index}"); got != "0" {
+		t.Errorf("an empty target should leave tmux's own Window, got window %q", got)
+	}
+}
+
+func TestHelpViewNamesTheJumpNotAKey(t *testing.T) {
+	m := barModel(t, parseTmuxPanes(tmuxPanesFixture))
+	m.height = 400 // tall enough to render every help line without scrolling
+	help := m.helpView()
+	if !strings.Contains(help, "jump to a tmux session") {
+		t.Errorf("help should name the tmux picker key, got:\n%s", help)
+	}
+	if !strings.Contains(help, "[commands] tmux") {
+		t.Error("help should name the Jump template")
+	}
+	// The Jump template is not a keystroke, so it must not be listed among the
+	// [commands] keys: that would print a binding no key can press.
+	for _, line := range strings.Split(help, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "tmux ") {
+			t.Errorf("help should not list tmux as a command key, got %q", line)
+		}
+	}
+	for _, want := range []string{"{tmux-session}", "{tmux-target}"} {
+		if !strings.Contains(help, want) {
+			t.Errorf("help should document %s", want)
+		}
 	}
 }
