@@ -442,7 +442,7 @@ func newModel(cfg Config) model {
 		loading:            true,
 	}
 	// Startup warnings, cleared by the next keypress.
-	warnings := []string{}
+	var warnings []string
 	if ageWarn != "" {
 		warnings = append(warnings, ageWarn)
 	}

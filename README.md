@@ -271,12 +271,12 @@ first `s` restarts at the presets, losing the configured order.
 
 The `[filter]` section sets what the index starts with. `live = true` applies
 the "live only" filter on start (the `o` toggle). `running` is the old spelling
-of that key: it is still accepted, turns the filter on, and warns on the status
-bar. `within` sets a starting age window, compared against each session's last
-activity (its file mtime for stubs that have none); `a` cycles the window at
-runtime. Live sessions always pass the window, so a long-running session whose
-transcript has been quiet for a week stays visible. A malformed `within` shows
-every session and warns on the status bar.
+of that key: it is still accepted, turns the filter on and never off, and warns
+on the status bar. `within` sets a starting age window, compared against each
+session's last activity (its file mtime for stubs that have none); `a` cycles
+the window at runtime. Live sessions always pass the window, so a long-running
+session whose transcript has been quiet for a week stays visible. A malformed
+`within` shows every session and warns on the status bar.
 
 ```toml
 [filter]

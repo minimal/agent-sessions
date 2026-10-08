@@ -249,7 +249,8 @@ func TestDeprecatedRunningKeyStillFilters(t *testing.T) {
 
 func TestDefaultConfigUsesLiveNotRunning(t *testing.T) {
 	var cfg Config
-	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
+	md, err := toml.Decode(defaultConfigTOML, &cfg)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Filter.Live || cfg.Filter.Running {
@@ -259,17 +260,12 @@ func TestDefaultConfigUsesLiveNotRunning(t *testing.T) {
 	if _, warn := cfg.filterLive(); warn != "" {
 		t.Errorf("the shipped default should use no deprecated key, got %q", warn)
 	}
-	section := defaultConfigTOML[strings.Index(defaultConfigTOML, "[filter]"):]
-	if j := strings.Index(section[1:], "\n["); j >= 0 {
-		section = section[:j+1]
+	// The shipped file must name the new key, and not the old one.
+	if !md.IsDefined("filter", "live") {
+		t.Error("the shipped default should set [filter] live")
 	}
-	if !strings.Contains(section, "live = false") {
-		t.Errorf("the shipped [filter] section should set live, got:\n%s", section)
-	}
-	for _, line := range strings.Split(section, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "running = ") {
-			t.Errorf("the shipped [filter] section should not set the deprecated running, got %q", line)
-		}
+	if md.IsDefined("filter", "running") {
+		t.Error("the shipped default should not set the deprecated [filter] running")
 	}
 }
 
