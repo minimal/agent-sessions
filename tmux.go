@@ -14,6 +14,75 @@ type paneInfo struct {
 	Name string
 }
 
+// tmuxSession is one Tmux Session on the server, as the Tmux Bar sees it.
+type tmuxSession struct {
+	id      string // $N
+	name    string
+	windows int
+}
+
+// tmuxServer is one poll of the tmux server the Tmux Bar maps: its sessions in
+// tmux's own order, the session the attached client is in, and a lookup from
+// each pane's recorded forms to its session name.
+//
+// byPane is the attribution map. Session.Pane holds one of two forms: pi's
+// marker writes $TMUX_PANE (the %N id form) and claude writes
+// session:window.pane. tmux allows ':' and '.' in session names, so a stored
+// string is never split back into its parts: both forms are listed as keys and
+// matched exactly.
+type tmuxServer struct {
+	sessions []tmuxSession
+	current  string            // $N of the attached client's session; "" outside tmux
+	byPane   map[string]string // %N and session:window.pane -> session name
+}
+
+// pollTmux reads the server in one list-panes call: every pane carries its
+// session's id, name and Window count, so a session's first appearance gives
+// tmux's own session order, and the pane's two recorded forms give attribution.
+// Returns nil when no server is reachable, which is what hides the Tmux Bar.
+func pollTmux() *tmuxServer {
+	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
+		"#{session_id}\t#{session_name}\t#{session_windows}\t#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}").Output()
+	if err != nil {
+		return nil
+	}
+	srv := parseTmuxPanes(string(out))
+	srv.current = tmuxCurrentSession()
+	return srv
+}
+
+// parseTmuxPanes builds the server snapshot from a `tmux list-panes -a` result.
+func parseTmuxPanes(out string) *tmuxServer {
+	srv := &tmuxServer{byPane: map[string]string{}}
+	seen := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		fields := strings.SplitN(line, "\t", 5)
+		if len(fields) != 5 {
+			continue
+		}
+		id, name, windows, paneID, paneName := fields[0], fields[1], fields[2], fields[3], fields[4]
+		if !seen[id] {
+			seen[id] = true
+			n, _ := strconv.Atoi(windows)
+			srv.sessions = append(srv.sessions, tmuxSession{id: id, name: name, windows: n})
+		}
+		srv.byPane[paneID] = name
+		srv.byPane[paneName] = name
+	}
+	return srv
+}
+
+// tmuxCurrentSession returns the id ($N) of the Tmux Session the attached
+// client is in. $TMUX holds the server's socket path, its pid and the client's
+// session id, comma-separated. Empty when the TUI runs outside tmux.
+func tmuxCurrentSession() string {
+	parts := strings.Split(os.Getenv("TMUX"), ",")
+	if len(parts) != 3 || parts[2] == "" {
+		return ""
+	}
+	return "$" + parts[2]
+}
+
 // tmuxPanes returns pane root pid -> pane for every pane on the server.
 func tmuxPanes() map[int]paneInfo {
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
