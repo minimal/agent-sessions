@@ -24,26 +24,26 @@ var defaultConfigTOML string
 // Config is the user-tunable configuration.
 type Config struct {
 	Styles struct {
-		Running  StyleConfig `toml:"running"`
-		Waiting  StyleConfig `toml:"waiting"`
-		Idle     StyleConfig `toml:"idle"`
-		Unread   StyleConfig `toml:"unread"`
-		Offline  StyleConfig `toml:"offline"`
-		Dimmed   StyleConfig `toml:"dimmed"`
-		Bar      StyleConfig `toml:"bar"`
+		Running StyleConfig `toml:"running"`
+		Waiting StyleConfig `toml:"waiting"`
+		Idle    StyleConfig `toml:"idle"`
+		Unread  StyleConfig `toml:"unread"`
+		Offline StyleConfig `toml:"offline"`
+		Dimmed  StyleConfig `toml:"dimmed"`
+		Bar     StyleConfig `toml:"bar"`
 		// ChipCurrent marks the Tmux Bar chip for the session the TUI runs in,
 		// on top of the pill every chip already draws.
 		ChipCurrent StyleConfig `toml:"chip_current"`
 		Selected    StyleConfig `toml:"selected"`
-		Preview  StyleConfig `toml:"preview"`
-		Index    StyleConfig `toml:"index"`      // the leading row number
-		Time     StyleConfig `toml:"time"`       // the last-activity timestamp (older dates)
-		TimeNow  StyleConfig `toml:"time_today"` // the last-activity timestamp (today)
-		Project  StyleConfig `toml:"project"`    // the directory column
-		Branch   StyleConfig `toml:"branch"`     // the git branch column
-		Model    StyleConfig `toml:"model"`      // the model column
-		Subject  StyleConfig `toml:"subject"`    // the session title column
-		Worktree StyleConfig `toml:"worktree"`   // marker shown next to worktree projects
+		Preview     StyleConfig `toml:"preview"`
+		Index       StyleConfig `toml:"index"`      // the leading row number
+		Time        StyleConfig `toml:"time"`       // the last-activity timestamp (older dates)
+		TimeNow     StyleConfig `toml:"time_today"` // the last-activity timestamp (today)
+		Project     StyleConfig `toml:"project"`    // the directory column
+		Branch      StyleConfig `toml:"branch"`     // the git branch column
+		Model       StyleConfig `toml:"model"`      // the model column
+		Subject     StyleConfig `toml:"subject"`    // the session title column
+		Worktree    StyleConfig `toml:"worktree"`   // marker shown next to worktree projects
 	} `toml:"styles"`
 	Commands map[string]string `toml:"commands"`
 	CircleCI struct {

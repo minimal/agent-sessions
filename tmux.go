@@ -68,6 +68,12 @@ func pollTmux() *tmuxServer {
 	return srv
 }
 
+// listPanesFormat is the one field list every tmux poll asks for. It is a
+// constant because a mistyped tmux variable would silently empty the Bar.
+const listPanesFormat = "#{session_id}\t#{session_name}\t#{session_windows}\t#{pane_id}\t" +
+	"#{session_name}:#{window_index}.#{pane_index}\t" +
+	"#{session_attached}\t#{window_active}\t#{window_zoomed_flag}\t#{pane_active}"
+
 // tmuxListPanes is the one tmux invocation the Bar and read tracking share.
 //
 // The socket is taken from $TMUX explicitly rather than left to tmux's own
@@ -77,14 +83,11 @@ func pollTmux() *tmuxServer {
 // matters to a user with more than one server. Outside tmux there is no socket
 // to name, so the default path is used.
 func tmuxListPanes() *exec.Cmd {
-	if sock, _, _ := strings.Cut(os.Getenv("TMUX"), ","); sock != "" {
-		return exec.Command("tmux", "-S", sock, "list-panes", "-a", "-F",
-			"#{session_id}\t#{session_name}\t#{session_windows}\t#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}\t"+
-				"#{session_attached}\t#{window_active}\t#{window_zoomed_flag}\t#{pane_active}")
+	sock, _, _ := strings.Cut(os.Getenv("TMUX"), ",")
+	if sock != "" {
+		return exec.Command("tmux", "-S", sock, "list-panes", "-a", "-F", listPanesFormat)
 	}
-	return exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{session_id}\t#{session_name}\t#{session_windows}\t#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}\t"+
-			"#{session_attached}\t#{window_active}\t#{window_zoomed_flag}\t#{pane_active}")
+	return exec.Command("tmux", "list-panes", "-a", "-F", listPanesFormat)
 }
 
 // parseTmuxPanes builds the server snapshot from a `tmux list-panes -a` result.
