@@ -90,7 +90,9 @@ type Config struct {
 		Glyph string `toml:"glyph"` // marker on worktree projects; "" hides it
 	} `toml:"worktree"`
 	Tmux struct {
-		Glyph string `toml:"glyph"` // marker on tmux-attachable sessions; "" hides it
+		Glyph    string `toml:"glyph"`     // marker on tmux-attachable sessions; "" hides it
+		Bar      bool   `toml:"bar"`       // show the Tmux Bar row; false gives the row back to the Index
+		MaxIcons int    `toml:"max_icons"` // agent glyphs shown per chip before "+N"; 0 hides them
 	} `toml:"tmux"`
 	Bg struct {
 		Glyph string `toml:"glyph"` // marker on sessions running as a detached `claude --background` job; "" hides it

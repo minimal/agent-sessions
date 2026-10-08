@@ -355,11 +355,16 @@ unread  = "166"   # darker orange
 regains focus, so the row you were reading isn't masked while you look at the
 session you opened.
 
-The `[tmux]` section sets the marker shown on tmux-attachable sessions:
+The `[tmux]` section sets the marker shown on tmux-attachable sessions, and
+the Tmux Bar: one row above the status bar holding a chip per tmux session on
+the server, so a workspace stays reachable even when the Index filters hide
+it.
 
 ```toml
 [tmux]
-glyph = "⊟"   # set to "" to hide the marker
+glyph = "⊟"     # set to "" to hide the marker
+bar   = true     # set to false to hide the Tmux Bar row
+max_icons = 3    # agent glyphs per chip before "+N"; 0 hides them
 ```
 
 `[commands]` binds keys to shell commands run on the selected session. Any

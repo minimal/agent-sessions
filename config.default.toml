@@ -237,6 +237,13 @@ within = "20m"  # ...modified within this window (a Go duration)
 # Marker shown next to live sessions running inside a tmux pane, i.e. the
 # ones the default Enter command can jump to. Set to "" to hide it.
 glyph = "⊟"
+# Show the Tmux Bar: one row above the status bar with a chip per Tmux
+# Session on the current server, independent of the Index filters. Set to
+# false to hide the row and give it back to the Index.
+bar = true
+# Agent glyphs shown per chip before a "+N" overflow count. 0 hides the
+# agent marks, leaving each chip its name and Window count.
+max_icons = 3
 
 [bg]
 # Marker shown next to sessions running as a detached `claude --background`

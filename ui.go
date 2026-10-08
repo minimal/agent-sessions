@@ -246,6 +246,9 @@ type model struct {
 	bgExec             bool              // run key-bound commands detached (no terminal takeover)
 	enterBySource      map[string]string // per-source override of the "enter" command (key = Source)
 	tmuxGlyph          string            // marker for tmux-attachable sessions; "" hides it
+	tmuxBar            bool              // show the Tmux Bar row ([tmux] bar)
+	tmuxSrv            *tmuxServer       // last tmux poll; nil while no server is reachable
+	maxIcons           int               // agent glyphs per Tmux Chip before "+N"; 0 hides them
 	bgGlyph            string            // marker for detached `claude --background` sessions; "" hides it
 	agentGlyphs        map[string]string // marker keyed by Session.Source
 	agentStyles        map[string]lipgloss.Style
@@ -394,6 +397,8 @@ func newModel(cfg Config) model {
 		bgExec:             cfg.Background,
 		enterBySource:      enterBySource,
 		tmuxGlyph:          cfg.Tmux.Glyph,
+		tmuxBar:            cfg.Tmux.Bar,
+		maxIcons:           max(0, cfg.Tmux.MaxIcons),
 		bgGlyph:            cfg.Bg.Glyph,
 		agentGlyphs:        agentGlyphs,
 		agentStyles:        agentStyles,
@@ -776,6 +781,7 @@ func (m *model) computeWidths() {
 
 type sessionsLoadedMsg struct {
 	sessions []Session
+	tmux     *tmuxServer // the Tmux Bar's poll; nil when not polled or no server answers
 	err      error
 }
 
@@ -791,7 +797,13 @@ const spinnerEvery = 120 * time.Millisecond
 
 func (m model) loadCmd() tea.Msg {
 	sessions, err := m.loader.Load()
-	return sessionsLoadedMsg{sessions: sessions, err: err}
+	// The Bar re-queries tmux on this same 2-second poll. It reads the server
+	// directly, never the filtered Index, so no filter can hide a workspace.
+	var srv *tmuxServer
+	if m.tmuxBar {
+		srv = pollTmux()
+	}
+	return sessionsLoadedMsg{sessions: sessions, tmux: srv, err: err}
 }
 
 func tickCmd() tea.Cmd {
@@ -834,6 +846,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionsLoadedMsg:
 		m.loading = false
+		m.tmuxSrv = msg.tmux // a dead server leaves nil, which hides the Bar
 		if msg.err != nil {
 			m.status = "Error: " + msg.err.Error()
 			return m, nil
@@ -1028,7 +1041,9 @@ func sourceEnterTemplate(source, global string, overrides map[string]string) str
 // The wheel moves the cursor; a left click selects the clicked row (or the
 // session its preview line belongs to), and switches to it too — running the
 // enter command — when [mouse] click_action is "select-switch" or the click
-// is the second of a double click. Overlays keep their own keyboard driving.
+// is the second of a double click. Only the page's own rows respond: the top
+// bar, the Tmux Bar and the status bar are not the Index. Overlays keep their
+// own keyboard driving.
 func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.showHelp || m.picker.active || m.prompt.active || m.searching || m.deleting != nil {
 		return m, nil
@@ -1043,7 +1058,8 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.clampOffset()
 		return m, nil
 	}
-	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft || msg.Y < 1 {
+	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft ||
+		msg.Y < 1 || msg.Y > m.pageSize() {
 		return m, nil
 	}
 	// The top bar is row 0 and the status bar sits below the page, so display
@@ -1515,9 +1531,15 @@ func (m model) lastRow() int {
 	return max(0, len(m.sessions)-1)
 }
 
-// pageSize is the number of index rows visible between the two bars.
+// pageSize is the number of index rows visible between the two bars. The Tmux
+// Bar, while shown, takes a row of its own: height-3, back to height-2 without
+// it, so non-tmux users lose no rows.
 func (m *model) pageSize() int {
-	return max(1, m.height-2)
+	bars := 2
+	if m.tmuxBarShown() {
+		bars++
+	}
+	return max(1, m.height-bars)
 }
 
 // dispRow is one rendered line: a session's main row, or its preview detail.
@@ -1664,8 +1686,193 @@ func (m model) View() string {
 			) + suffix
 		}
 	}
+	if m.tmuxBarShown() {
+		b.WriteString(m.tmuxBarView())
+		b.WriteString("\n")
+	}
 	b.WriteString(m.styles.bar.Render(pad(status, m.width)))
 	return b.String()
+}
+
+// tmuxChipAgent is one live agent on a Tmux Chip: the Agent Source mark and its
+// Attention.
+type tmuxChipAgent struct {
+	Source  string
+	Waiting bool
+	Unread  bool
+}
+
+// tmuxChip is one Tmux Session in the Tmux Bar.
+type tmuxChip struct {
+	Name    string
+	Windows int
+	Current bool
+	Agents  []tmuxChipAgent
+}
+
+// chipGap separates one chip from the next, and chipNameFloor is the narrowest a
+// chip name shrinks to before the row's tail is cut instead: a shorter name says
+// nothing about which session it is.
+const (
+	chipGap       = "  "
+	chipNameFloor = 4
+)
+
+// tmuxBarShown reports whether the Tmux Bar occupies a row on this screen. Help
+// and the picker render their own two-bar layout, and the row is absent while no
+// tmux server is reachable: no error, no empty line.
+func (m model) tmuxBarShown() bool {
+	return m.tmuxBar && m.tmuxSrv != nil && len(m.tmuxSrv.sessions) > 0 &&
+		!m.showHelp && !m.picker.active
+}
+
+// tmuxChips maps the last tmux poll onto the Bar's chips: one per Tmux Session,
+// in tmux's own order so a click target never moves, each holding the live
+// agents attributed to it.
+func (m model) tmuxChips() []tmuxChip {
+	if m.tmuxSrv == nil {
+		return nil
+	}
+	chips := make([]tmuxChip, 0, len(m.tmuxSrv.sessions))
+	index := make(map[string]int, len(m.tmuxSrv.sessions))
+	for _, s := range m.tmuxSrv.sessions {
+		index[s.name] = len(chips)
+		chips = append(chips, tmuxChip{
+			Name:    s.name,
+			Windows: s.windows,
+			Current: s.id != "" && s.id == m.tmuxSrv.current,
+		})
+	}
+	// Agents come from the unfiltered list, so the liveness filter cannot empty a
+	// chip, and only from Live() sessions: a Pane can be set on a dead session by
+	// an adapter's cwd heuristic, and those must not appear. Their order is the
+	// Index order, so a chip's marks never react to state.
+	for _, s := range m.all {
+		if !s.Live() || s.Pane == "" {
+			continue
+		}
+		name, ok := m.tmuxSrv.byPane[s.Pane]
+		if !ok {
+			continue // a pane on another server, or one that has since closed
+		}
+		i, ok := index[name]
+		if !ok {
+			continue
+		}
+		chips[i].Agents = append(chips[i].Agents, tmuxChipAgent{
+			Source:  s.Source,
+			Waiting: s.State == StateWaiting,
+			Unread:  m.unread[s.ID] && s.State == StateIdle,
+		})
+	}
+	return chips
+}
+
+// tmuxBarView renders the Tmux Bar: one chip per Tmux Session in tmux's own
+// order, across the full width. Every piece is styled on its own -- a single
+// wrapper around the row would let one cell's reset drop the Bar's reverse for
+// the rest of it.
+func (m model) tmuxBarView() string {
+	chips := m.tmuxChips()
+	if len(chips) == 0 {
+		return ""
+	}
+	widest := 0
+	for _, c := range chips {
+		widest = max(widest, lipgloss.Width(c.Name))
+	}
+	// Names shrink together, never below the floor; only then is the tail cut.
+	nameCap := widest
+	row := m.renderTmuxBar(chips, nameCap)
+	for nameCap > chipNameFloor && lipgloss.Width(row) > m.width {
+		nameCap--
+		row = m.renderTmuxBar(chips, nameCap)
+	}
+	row = trunc(row, m.width)
+	// The slack is its own segment: the last chip's reset has already cleared the
+	// Bar style by the time the padding is emitted.
+	if gap := m.width - lipgloss.Width(row); gap > 0 {
+		row += m.barCell(lipgloss.NewStyle(), strings.Repeat(" ", gap))
+	}
+	return row
+}
+
+// renderTmuxBar renders every chip at one name width, joined by a gap.
+func (m model) renderTmuxBar(chips []tmuxChip, nameCap int) string {
+	parts := make([]string, len(chips))
+	for i, c := range chips {
+		parts[i] = m.renderTmuxChip(c, nameCap)
+	}
+	return strings.Join(parts, m.barCell(lipgloss.NewStyle(), chipGap))
+}
+
+// renderTmuxChip renders one chip: the session name, its Window count when
+// greater than one, then one mark per live agent, capped at [tmux] max_icons
+// with a "+N" overflow. The current session's chip is bold and marked with "▸".
+func (m model) renderTmuxChip(c tmuxChip, nameCap int) string {
+	base := m.styles.bar
+	if c.Current {
+		base = base.Bold(true) // the marker avoids reverse video: Attention owns that channel
+	}
+	cell := func(st lipgloss.Style, text string) string {
+		return overlay(base, st).Render(text)
+	}
+	marker := ""
+	if c.Current {
+		marker = "▸ "
+	}
+	var b strings.Builder
+	b.WriteString(cell(lipgloss.NewStyle(), marker+trunc(c.Name, nameCap)))
+	if c.Windows > 1 {
+		b.WriteString(cell(lipgloss.NewStyle(), fmt.Sprintf("(%d)", c.Windows)))
+	}
+	if m.maxIcons > 0 && m.colAgentGlyph > 0 {
+		shown := c.Agents
+		if len(shown) > m.maxIcons {
+			shown = shown[:m.maxIcons]
+		}
+		for _, a := range shown {
+			b.WriteString(cell(lipgloss.NewStyle(), " "))
+			b.WriteString(m.tmuxGlyphCell(a, base))
+		}
+		if n := len(c.Agents) - len(shown); n > 0 {
+			b.WriteString(cell(lipgloss.NewStyle(), fmt.Sprintf(" +%d", n)))
+		}
+	}
+	return b.String()
+}
+
+// tmuxGlyphCell renders one agent's mark: the Agent Source, decorated by
+// Attention and never replaced by it. waiting inverts the Bar's own video, so
+// it reads as reverse video against a reverse row instead of vanishing into it;
+// Unread carries the attention colour; running and idle stay plain.
+func (m model) tmuxGlyphCell(a tmuxChipAgent, base lipgloss.Style) string {
+	mark := pad(m.agentGlyphs[a.Source], m.colAgentGlyph)
+	switch {
+	case a.Waiting:
+		bold := m.styles.state[StateWaiting].GetBold() || base.GetBold()
+		return base.Bold(bold).Reverse(!base.GetReverse()).Render(mark)
+	case a.Unread:
+		fg := m.styles.unread.GetForeground()
+		if isNoColor(fg) {
+			return base.Render(mark)
+		}
+		bold := m.styles.unread.GetBold() || base.GetBold()
+		// On a reverse row, the colour goes on the channel the terminal swaps, so
+		// the mark stays coloured text on the row's own background (the rule the
+		// reversed cursor row's status marker follows).
+		if base.GetReverse() {
+			return lipgloss.NewStyle().Background(fg).Reverse(true).Bold(bold).Render(mark)
+		}
+		return base.Foreground(fg).Bold(bold).Render(mark)
+	}
+	return base.Render(mark)
+}
+
+// barCell renders one piece of the Tmux Bar in the Bar's own style, with a cell
+// style layered on top.
+func (m model) barCell(st lipgloss.Style, text string) string {
+	return overlay(m.styles.bar, st).Render(text)
 }
 
 // pickerView renders the selection overlay: the narrowed item list, with
