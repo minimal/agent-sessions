@@ -107,29 +107,117 @@ func TestTmuxCurrentSession(t *testing.T) {
 	}
 }
 
-// TestCurrentTmuxSessionFallsBackToTheOwnPane covers a $TMUX that lost its
-// session field while $TMUX_PANE survived. One scrubbed variable must not
-// silently blank the "you are here" mark on the Bar.
-func TestCurrentTmuxSessionFallsBackToTheOwnPane(t *testing.T) {
-	srv := parseTmuxPanes(tmuxPanesFixture)
+// ttyPanesFixture is the same shape as tmuxPanesFixture plus the pane_tty
+// column. The pane the "our own pane" cases point at ($0) is deliberately NOT
+// the attached one ($4), so a test can tell the two sources apart: a tty that
+// matches must give $0, a tty that does not must fall through to $4.
+const ttyPanesFixture = "\n" +
+	"$0\t_home\t1\t%0\t_home:0.0\t0\t1\t0\t1\t/dev/pts/9\n" +
+	"$4\tagent-sessions\t5\t%6\tagent-sessions:0.0\t1\t1\t0\t1\t/dev/pts/3\n" +
+	"$5\tagent-sessions_latest\t2\t%8\tagent-sessions_latest:0.0\t0\t1\t0\t1\t/dev/pts/4\n"
+
+// pinOwnTTY makes this process claim to be on tty for the duration of the test.
+func pinOwnTTY(t *testing.T, tty string) {
+	t.Helper()
+	prev := ownTTY
+	ownTTY = func() (string, bool) {
+		if tty == "" {
+			return "", false
+		}
+		return tty, true
+	}
+	t.Cleanup(func() { ownTTY = prev })
+}
+
+// TestCurrentTmuxSessionPrefersTMUX covers the normal case: $TMUX names the
+// session and that session is on the server being polled.
+func TestCurrentTmuxSessionPrefersTMUX(t *testing.T) {
+	srv := parseTmuxPanes(ttyPanesFixture)
+	t.Setenv("TMUX", "/tmp/tmux-1000/default,1290,4")
 	t.Setenv("TMUX_PANE", "%6")
-
-	t.Setenv("TMUX", "")
+	pinOwnTTY(t, "/dev/pts/3")
 	if got := currentTmuxSession(srv); got != "$4" {
-		t.Errorf("with no TMUX, the own pane should give its session, got %q", got)
+		t.Errorf("a $TMUX naming a polled session should win, got %q", got)
 	}
+}
 
-	// A usable $TMUX wins: it is the authoritative form.
-	t.Setenv("TMUX", "/tmp/tmux-1000/default,1290,2")
-	if got := currentTmuxSession(srv); got != "$2" {
-		t.Errorf("TMUX should win over the pane fallback, got %q", got)
+// TestCurrentTmuxSessionIgnoresAForeignTMUX covers $TMUX naming a session that
+// is not on the polled server. That is the dashboard's shape in miniature: the
+// app sits in a pane of another server, so the id can never match a chip and
+// must not stop the search for a real answer.
+func TestCurrentTmuxSessionIgnoresAForeignTMUX(t *testing.T) {
+	srv := parseTmuxPanes(ttyPanesFixture)
+	t.Setenv("TMUX", "/tmp/tmux-1000/other,99,7") // $7 is not in the fixture
+	t.Setenv("TMUX_PANE", "%6")
+	pinOwnTTY(t, "/dev/pts/3")
+	// Falls through to the pane, which really is ours.
+	if got := currentTmuxSession(srv); got != "$4" {
+		t.Errorf("a foreign $TMUX should fall through to our own pane, got %q", got)
 	}
+}
 
-	// Outside tmux entirely there is no current session, and the Bar says so by
-	// marking nothing rather than guessing.
+// TestCurrentTmuxSessionTrustsThePaneOnlyOnItsOwnTTY guards against marking
+// the wrong session. Pane ids are unique only per server, so a pane id from
+// another server can name a real pane here by coincidence; the tty is what
+// tells the two apart.
+func TestCurrentTmuxSessionTrustsThePaneOnlyOnItsOwnTTY(t *testing.T) {
+	srv := parseTmuxPanes(ttyPanesFixture)
 	t.Setenv("TMUX", "")
+	t.Setenv("TMUX_PANE", "%0")
+
+	// Our own pane: the tty matches.
+	pinOwnTTY(t, "/dev/pts/9")
+	if got := currentTmuxSession(srv); got != "$0" {
+		t.Errorf("our own pane should give its session, got %q", got)
+	}
+	// A pane on another server, which happens to share the id %0. The pane
+	// cannot be trusted, so the answer must come from the attached session
+	// instead -- $4, not the $0 the pane id would have given.
+	pinOwnTTY(t, "/dev/pts/77")
+	if got := currentTmuxSession(srv); got != "$4" {
+		t.Errorf("a pane with someone else's tty must not be trusted, got %q", got)
+	}
+	// A poll with no tty column at all: nothing can be proven, so nothing is
+	// claimed from the pane.
+	bare := parseTmuxPanes(tmuxPanesFixture)
+	pinOwnTTY(t, "/dev/pts/9")
+	if got := currentTmuxSession(bare); got != "" {
+		t.Errorf("a pane with no tty must not be trusted, got %q", got)
+	}
+}
+
+// TestCurrentTmuxSessionFallsBackToTheSoleAttachedSession covers the dashboard:
+// the app is given a $TMUX whose session field is blank and sits in a pane of
+// a server the Bar does not show, so the attached work session is the best
+// available answer.
+func TestCurrentTmuxSessionFallsBackToTheSoleAttachedSession(t *testing.T) {
+	srv := parseTmuxPanes(ttyPanesFixture)
+	t.Setenv("TMUX", "/tmp/tmux-1000/default,,") // what agent-dashboard sets
+	t.Setenv("TMUX_PANE", "%0")                  // a pane of the outer server
+	pinOwnTTY(t, "/dev/pts/77")                  // not a pane of this server
+	if got := currentTmuxSession(srv); got != "$4" {
+		t.Errorf("the sole attached session should stand in, got %q", got)
+	}
+}
+
+// TestCurrentTmuxSessionClaimsNothingWhenAmbiguous covers several attached
+// sessions: there is no single answer, so the Bar marks nothing rather than
+// picking one.
+func TestCurrentTmuxSessionClaimsNothingWhenAmbiguous(t *testing.T) {
+	// tmuxPanesFixture has three sessions with an attached client.
+	srv := parseTmuxPanes(tmuxPanesFixture)
+	if srv.attached != "" {
+		t.Errorf("several attached sessions should leave no single answer, got %q", srv.attached)
+	}
+	t.Setenv("TMUX", "/tmp/tmux-1000/default,,")
 	t.Setenv("TMUX_PANE", "")
+	pinOwnTTY(t, "")
 	if got := currentTmuxSession(srv); got != "" {
+		t.Errorf("with no answer available nothing should be marked, got %q", got)
+	}
+	// And outside tmux entirely.
+	t.Setenv("TMUX", "")
+	if got := currentTmuxSession(parseTmuxPanes("")); got != "" {
 		t.Errorf("outside tmux there is no current session, got %q", got)
 	}
 }
@@ -161,6 +249,12 @@ func TestPollTmuxLive(t *testing.T) {
 	for key, pane := range srv.byPane {
 		if !names[pane.session] {
 			t.Errorf("pane %q maps to unknown session %q", key, pane.session)
+		}
+		if pane.tty == "" {
+			// A mistyped pane_tty in the format string would not empty the Bar,
+			// so nothing else would notice; the "is this my own pane" check
+			// would just quietly stop trusting panes.
+			t.Errorf("pane %q has no tty, so it can never be identified as ours", key)
 		}
 		if pane.id == "" || pane.name == "" {
 			t.Errorf("pane %q has an incomplete entry: %+v", key, pane)

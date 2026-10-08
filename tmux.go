@@ -22,6 +22,7 @@ type tmuxPane struct {
 	name      string // session:window.pane
 	session   string // the pane's Tmux Session (name)
 	sessionID string // the pane's Tmux Session id ($N), to resolve $TMUX_PANE
+	tty       string // the pane's tty path, to prove a pane really is ours
 }
 
 // tmuxSession is one Tmux Session on the server, as the Tmux Bar sees it.
@@ -51,6 +52,14 @@ type tmuxServer struct {
 	current  string              // $N of the attached client's session; "" outside tmux
 	byPane   map[string]tmuxPane // %N and session:window.pane -> pane
 	onScreen map[string]bool     // %N and session:window.pane -> on screen
+
+	// attached is the $N of the only session on this server with a client
+	// attached, or "" when none or several are. It stands in for "you are
+	// here" when the app cannot name its own session, which is the case when a
+	// launcher such as agent-dashboard hands it a $TMUX with the session field
+	// blanked. Several attached sessions means there is no single answer, so
+	// nothing is claimed.
+	attached string
 }
 
 // pollTmux reads the server in one list-panes call: every pane carries its
@@ -70,9 +79,11 @@ func pollTmux() *tmuxServer {
 
 // listPanesFormat is the one field list every tmux poll asks for. It is a
 // constant because a mistyped tmux variable would silently empty the Bar.
+// pane_tty is last and optional in the parser: it is only there to prove that
+// the pane named by $TMUX_PANE is really the one this process is running in.
 const listPanesFormat = "#{session_id}\t#{session_name}\t#{session_windows}\t#{pane_id}\t" +
 	"#{session_name}:#{window_index}.#{pane_index}\t" +
-	"#{session_attached}\t#{window_active}\t#{window_zoomed_flag}\t#{pane_active}"
+	"#{session_attached}\t#{window_active}\t#{window_zoomed_flag}\t#{pane_active}\t#{pane_tty}"
 
 // tmuxListPanes is the one tmux invocation the Bar and read tracking share.
 //
@@ -95,24 +106,38 @@ func parseTmuxPanes(out string) *tmuxServer {
 	srv := &tmuxServer{byPane: map[string]tmuxPane{}, onScreen: map[string]bool{}}
 	seen := map[string]bool{}
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		fields := strings.SplitN(line, "\t", 9)
-		if len(fields) != 9 {
+		// The tenth column (pane_tty) is optional: an older or hand-written
+		// fixture without it still parses, and a pane with no tty is simply one
+		// this process cannot prove is its own.
+		fields := strings.SplitN(line, "\t", 10)
+		if len(fields) < 9 {
 			continue
 		}
 		id, name, windows, paneID, paneName := fields[0], fields[1], fields[2], fields[3], fields[4]
 		attached, active, zoomed, focused := fields[5], fields[6], fields[7], fields[8]
+		tty := ""
+		if len(fields) == 10 {
+			tty = fields[9]
+		}
 		if !seen[id] {
 			seen[id] = true
 			n, _ := strconv.Atoi(windows)
 			srv.sessions = append(srv.sessions, tmuxSession{id: id, name: name, windows: n})
 		}
-		pane := tmuxPane{id: paneID, name: paneName, session: name, sessionID: id}
+		pane := tmuxPane{id: paneID, name: paneName, session: name, sessionID: id, tty: tty}
 		srv.byPane[paneID] = pane
 		srv.byPane[paneName] = pane
 		// An attached client sees its session's current Window, which shows every
 		// pane unless the Window is zoomed -- and a zoomed Window shows only the
 		// focused pane.
 		clients, _ := strconv.Atoi(attached)
+		if clients > 0 {
+			if srv.attached != "" {
+				srv.attached = "" // more than one: no single answer
+			} else {
+				srv.attached = id
+			}
+		}
 		if clients > 0 && active == "1" && (zoomed != "1" || focused == "1") {
 			srv.onScreen[paneID] = true
 			srv.onScreen[paneName] = true
@@ -133,24 +158,81 @@ func tmuxCurrentSession() string {
 	return "$" + parts[2]
 }
 
-// currentTmuxSession resolves the Tmux Session this process is running in, for
-// the Bar to mark as "you are here". It returns "" outside tmux, which is the
-// honest answer: there is no current session to mark, and the Bar renders every
-// session unmarked rather than guessing one.
+// currentTmuxSession resolves the Tmux Session the Bar should mark as "you are
+// here", as a $N id, or "" when there is no defensible answer.
 //
-// $TMUX's session id is authoritative and is used whenever it is usable. When
-// it is not -- $TMUX scrubbed or malformed, but $TMUX_PANE still exported --
-// the pane is resolved against the same poll through byPane, so one lost
-// variable cannot silently blank the marker.
+// Three sources, in order of how directly each one names the session:
+//
+//  1. $TMUX's session id, when it is usable AND names a session on the server
+//     being polled. This is the normal case.
+//  2. $TMUX_PANE, resolved through byPane -- but only when that pane's tty is
+//     our own. Pane ids are unique only per server, so an id alone could name
+//     a different server's pane that happens to share the number and mark a
+//     session we are not in. The tty is what makes the match real.
+//  3. The server's only attached session. This is for launchers that blank
+//     $TMUX's session field on purpose: agent-dashboard runs the app in the
+//     outer "dash" server and hands it a $TMUX pointing at the inner work
+//     socket, so the app is in a pane of a server the Bar does not show and
+//     cannot name. The work session the user is actually looking at is the one
+//     with a client attached, which is a good answer rather than none. Several
+//     attached sessions means no single answer, so nothing is marked.
 func currentTmuxSession(srv *tmuxServer) string {
-	if id := tmuxCurrentSession(); id != "" {
-		return id
-	}
-	pane := os.Getenv("TMUX_PANE")
-	if pane == "" || srv == nil {
+	if srv == nil {
 		return ""
 	}
-	return srv.byPane[pane].sessionID
+	if id := tmuxCurrentSession(); id != "" && srv.hasSession(id) {
+		return id
+	}
+	if id := ownPaneSession(srv); id != "" {
+		return id
+	}
+	return srv.attached
+}
+
+// ownPaneSession resolves $TMUX_PANE to its session, but only when the pane is
+// demonstrably this process's own pane. A pane with no tty in the poll (an
+// older server, a hand-built fixture) is not trusted, because then nothing
+// distinguishes it from a different pane that happens to share the id.
+func ownPaneSession(srv *tmuxServer) string {
+	paneID := os.Getenv("TMUX_PANE")
+	if paneID == "" {
+		return ""
+	}
+	pane, ok := srv.byPane[paneID]
+	if !ok || pane.tty == "" {
+		return ""
+	}
+	own, ok := ownTTY()
+	if !ok || own != pane.tty {
+		return ""
+	}
+	return pane.sessionID
+}
+
+// ownTTY is a variable so a test can pin it: the real one reads
+// /proc/self/fd/0, which under `go test` is not the terminal, so the tty match
+// could otherwise not be exercised at all.
+var ownTTY = ownTTYPath
+
+// ownTTYPath is the tty path this process is attached to, or false when that
+// cannot be determined. Reading /proc/self/fd/0 is a Linux path; elsewhere this
+// is not available and the caller falls back to the other sources.
+func ownTTYPath() (string, bool) {
+	link, err := os.Readlink("/proc/self/fd/0")
+	if err != nil || !strings.HasPrefix(link, "/dev/") {
+		return "", false
+	}
+	return link, true
+}
+
+// hasSession reports whether id names a session on this server.
+func (srv *tmuxServer) hasSession(id string) bool {
+	for _, s := range srv.sessions {
+		if s.id == id {
+			return true
+		}
+	}
+	return false
 }
 
 // tmuxPanes returns pane root pid -> pane for every pane on the server.
