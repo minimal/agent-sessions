@@ -289,7 +289,7 @@ type model struct {
 	query              string
 	project            string                  // limit the index to this project cwd; "" is no limit
 	branch             string                  // limit the index to this branch; "" is no limit
-	liveOnly           bool                    // limit the index to sessions with a running claude process
+	liveOnly           bool                    // limit the index to live sessions (a running agent process)
 	ageWindow          time.Duration           // limit the index to sessions active within this window; 0 = all
 	input              textinput.Model         // line editor backing the search and text prompts
 	searching          bool                    // the search prompt is open and capturing keys
@@ -388,13 +388,14 @@ func newModel(cfg Config) model {
 	}
 	dims := cfg.SortDims()
 	ageWindow, ageWarn := cfg.FilterWithin()
+	liveOnly, liveWarn := cfg.filterLive()
 	m := model{
 		loader:             newMultiLoader(adapters),
 		sortGroup:          cfg.Sort.Group,
 		configuredSortDims: dims,
 		styles:             newStyles(cfg),
 		commands:           cfg.Commands,
-		liveOnly:           cfg.Filter.Running,
+		liveOnly:           liveOnly,
 		ageWindow:          ageWindow,
 		bgExec:             cfg.Background,
 		enterBySource:      enterBySource,
@@ -440,8 +441,16 @@ func newModel(cfg Config) model {
 		lastClickRow:       -1,
 		loading:            true,
 	}
+	// Startup warnings, cleared by the next keypress.
+	warnings := []string{}
 	if ageWarn != "" {
-		m.notice = ageWarn // startup warning, cleared by the next keypress
+		warnings = append(warnings, ageWarn)
+	}
+	if liveWarn != "" {
+		warnings = append(warnings, liveWarn)
+	}
+	if len(warnings) > 0 {
+		m.notice = strings.Join(warnings, " · ")
 	}
 	m.computeWidths()
 	return m
@@ -1466,7 +1475,7 @@ func (m *model) applyFilter() {
 		parts = append(parts, "branch "+m.branch)
 	}
 	if m.liveOnly {
-		parts = append(parts, "running only")
+		parts = append(parts, "live only")
 	}
 	if label := ageWindowLabel(m.ageWindow); label != "" {
 		parts = append(parts, label)
@@ -2078,7 +2087,7 @@ func (m model) helpView() string {
 		"    g / G              first / last session",
 		"    /                  search; Enter keeps the filter, Esc clears it",
 		"    f                  filter menu: p by project, b by branch (pickers)",
-		"    o                  toggle showing only sessions with a running agent process",
+		"    o                  toggle live only: sessions with a running agent process",
 		"    a                  cycle the age window: all, 7 days, 30 days",
 		"    s                  cycle the sort order: activity, repo, active,repo",
 	}

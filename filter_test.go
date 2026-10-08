@@ -196,3 +196,101 @@ func TestMalformedFilterWithinWarns(t *testing.T) {
 		t.Errorf("a valid [filter] within should not warn, got %q", m.notice)
 	}
 }
+
+func TestFilterLiveKey(t *testing.T) {
+	cases := []struct {
+		live, running bool
+		want          bool
+		wantWarn      bool
+	}{
+		{false, false, false, false}, // the shipped default
+		{true, false, true, false},   // the new key
+		{false, true, true, true},    // the deprecated alias still turns it on
+		{true, true, true, true},     // both: it filters, and still warns
+	}
+	for _, c := range cases {
+		var cfg Config
+		cfg.Filter.Live, cfg.Filter.Running = c.live, c.running
+		got, warn := cfg.filterLive()
+		if got != c.want || (warn != "") != c.wantWarn {
+			t.Errorf("filterLive() with live=%v running=%v = (%v, %q), want (%v, warn=%v)",
+				c.live, c.running, got, warn, c.want, c.wantWarn)
+		}
+	}
+}
+
+func TestDeprecatedRunningKeyStillFilters(t *testing.T) {
+	// loadConfig decodes the shipped defaults first, then the user's file over
+	// them, so an old config that only knows `running` must still filter.
+	var cfg Config
+	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := toml.Decode("[filter]\nrunning = true\n", &cfg); err != nil {
+		t.Fatal(err)
+	}
+	m := newModel(cfg)
+	if !m.liveOnly {
+		t.Error("[filter] running = true should still apply the liveness filter")
+	}
+	if !strings.Contains(m.notice, "deprecated") {
+		t.Errorf("the deprecated key should warn on the status bar, got %q", m.notice)
+	}
+	// The new key is silent, and the old one cannot switch it off.
+	cfg.Filter.Live, cfg.Filter.Running = true, false
+	if m := newModel(cfg); !m.liveOnly || m.notice != "" {
+		t.Errorf("[filter] live = true should filter silently, got liveOnly=%v notice=%q", m.liveOnly, m.notice)
+	}
+	cfg.Filter.Live, cfg.Filter.Running = true, true
+	if m := newModel(cfg); !m.liveOnly {
+		t.Error("the deprecated key must not turn off a live = true beside it")
+	}
+}
+
+func TestDefaultConfigUsesLiveNotRunning(t *testing.T) {
+	var cfg Config
+	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Filter.Live || cfg.Filter.Running {
+		t.Errorf("the shipped default should show every session, got live=%v running=%v",
+			cfg.Filter.Live, cfg.Filter.Running)
+	}
+	if _, warn := cfg.filterLive(); warn != "" {
+		t.Errorf("the shipped default should use no deprecated key, got %q", warn)
+	}
+	section := defaultConfigTOML[strings.Index(defaultConfigTOML, "[filter]"):]
+	if j := strings.Index(section[1:], "\n["); j >= 0 {
+		section = section[:j+1]
+	}
+	if !strings.Contains(section, "live = false") {
+		t.Errorf("the shipped [filter] section should set live, got:\n%s", section)
+	}
+	for _, line := range strings.Split(section, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "running = ") {
+			t.Errorf("the shipped [filter] section should not set the deprecated running, got %q", line)
+		}
+	}
+}
+
+func TestStatusSaysLiveOnly(t *testing.T) {
+	m := ageTestModel(time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC))
+	m.liveOnly = true
+	m.applyFilter()
+	if !strings.Contains(m.status, "live only") {
+		t.Errorf("the status should say live only, got %q", m.status)
+	}
+	if strings.Contains(m.status, "running only") {
+		t.Errorf("the status should never say running only, got %q", m.status)
+	}
+	// o still toggles the filter, in both directions.
+	mm, _ := m.Update(key("o"))
+	off := mm.(model)
+	if off.liveOnly || strings.Contains(off.status, "live only") {
+		t.Errorf("o should clear the filter, got liveOnly=%v status=%q", off.liveOnly, off.status)
+	}
+	mm, _ = off.Update(key("o"))
+	if on := mm.(model); !on.liveOnly || !strings.Contains(on.status, "live only") {
+		t.Errorf("o should apply the filter again, got liveOnly=%v status=%q", on.liveOnly, on.status)
+	}
+}

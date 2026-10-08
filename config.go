@@ -106,7 +106,8 @@ type Config struct {
 		Group string `toml:"group"` // "activity" (default) or "repo"
 	} `toml:"sort"`
 	Filter struct {
-		Running bool   `toml:"running"` // start with the "only running" filter ('o') already applied
+		Live    bool   `toml:"live"`    // start with the "live only" filter ('o') already applied
+		Running bool   `toml:"running"` // deprecated alias for live; see filterLive
 		Within  string `toml:"within"`  // starting age window, a Go duration; "" or malformed = all
 	} `toml:"filter"`
 	Git struct {
@@ -260,6 +261,18 @@ func (c Config) runningTimer() runningTimerConfig {
 func (c Config) validate() error {
 	_, err := parseRunningTimerConfig(c.Status.Timer.Mode, c.Status.Timer.After)
 	return err
+}
+
+// filterLive returns the liveness filter the index starts with, and a notice
+// when the deprecated key is in use. [filter] running is the pre-rename spelling
+// of live. It can turn the filter on but not off: the shipped default leaves
+// live false, so an alias that could turn it off would silently undo a
+// live = true beside it.
+func (c Config) filterLive() (bool, string) {
+	if c.Filter.Running {
+		return true, "[filter] running is deprecated; use live"
+	}
+	return c.Filter.Live, ""
 }
 
 // StyleConfig describes one visual element of the UI.
