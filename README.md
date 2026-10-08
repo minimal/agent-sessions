@@ -110,6 +110,7 @@ the `Adapter` interface plus a `[sources.<name>]` entry — see `ADAPTERS.md`.
 | `o` | show only sessions with a running agent process (toggle) |
 | `a` | cycle the age window: all / last 7 days / last 30 days |
 | `s` | cycle the sort order: `activity` / `repo` / `active,repo` (the `[sort]` presets) |
+| `t` | jump to a tmux session, chosen from a picker (Attention first; `[tmux] key`) |
 | `Esc` | clear the search, project/branch filters and age window |
 | `g` / `G` | first / last session |
 | `ctrl+d` / `ctrl+u` | half page down / up |
@@ -358,13 +359,16 @@ session you opened.
 The `[tmux]` section sets the marker shown on tmux-attachable sessions, and
 the Tmux Bar: one row above the status bar holding a chip per tmux session on
 the server, so a workspace stays reachable even when the Index filters hide
-it.
+it. Clicking a chip, or picking a session from the `t` picker, jumps there:
+tmux's last-active window, or the pane of an agent that is waiting or unread.
+The jump is the `[commands] tmux` template, so it stays configurable.
 
 ```toml
 [tmux]
 glyph = "⊟"     # set to "" to hide the marker
 bar   = true     # set to false to hide the Tmux Bar row
 max_icons = 3    # agent glyphs per chip before "+N"; 0 hides them
+key   = "t"      # jump picker; "" unbinds it
 ```
 
 `[commands]` binds keys to shell commands run on the selected session. Any

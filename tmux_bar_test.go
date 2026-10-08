@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -55,13 +56,17 @@ func TestParseTmuxPanesKeysBothPaneFormsToSessionName(t *testing.T) {
 		"x.z:0.0":                   "x.z", // nor is a '.' at the end of a name
 	}
 	for key, want := range cases {
-		if got, ok := srv.byPane[key]; !ok || got != want {
-			t.Errorf("byPane[%q] = %q (present=%v), want %q", key, got, ok, want)
+		if got, ok := srv.byPane[key]; !ok || got.session != want {
+			t.Errorf("byPane[%q].session = %q (present=%v), want %q", key, got.session, ok, want)
 		}
+	}
+	// Both forms point at the same pane, and the id form is the Jump target.
+	if got := srv.byPane["x:y:0.0"]; got.id != "%19" || got.name != "x:y:0.0" {
+		t.Errorf("byPane[\"x:y:0.0\"] = %+v, want the %%19 pane", got)
 	}
 	// A splitter that took the text before the first ':' would attribute this
 	// pane to a session named "x", which does not exist.
-	if got := srv.byPane["x:y:0.0"]; got == "x" {
+	if got := srv.byPane["x:y:0.0"]; got.session == "x" {
 		t.Error("pane forms must be matched exactly, never split on ':'")
 	}
 }
@@ -118,9 +123,12 @@ func TestPollTmuxLive(t *testing.T) {
 	if len(srv.byPane) == 0 {
 		t.Error("a server with sessions should attribute at least one pane")
 	}
-	for key, name := range srv.byPane {
-		if !names[name] {
-			t.Errorf("pane %q maps to unknown session %q", key, name)
+	for key, pane := range srv.byPane {
+		if !names[pane.session] {
+			t.Errorf("pane %q maps to unknown session %q", key, pane.session)
+		}
+		if pane.id == "" || pane.name == "" {
+			t.Errorf("pane %q has an incomplete entry: %+v", key, pane)
 		}
 	}
 	if srv.current != "" {
@@ -138,10 +146,17 @@ func TestPollTmuxLive(t *testing.T) {
 // snapshot and sessions. It is the starting point for the Bar's rendering tests.
 func barModel(t *testing.T, srv *tmuxServer, sessions ...Session) model {
 	t.Helper()
+	return barModelWith(t, func(*Config) {}, srv, sessions...)
+}
+
+// barModelWith is barModel with a tweak applied to the shipped config first.
+func barModelWith(t *testing.T, tweak func(*Config), srv *tmuxServer, sessions ...Session) model {
+	t.Helper()
 	var cfg Config
 	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
 		t.Fatal(err)
 	}
+	tweak(&cfg)
 	m := newModel(cfg)
 	m.all, m.sessions = sessions, sessions
 	m.tmuxSrv = srv
@@ -557,5 +572,272 @@ func TestTmuxBarRowIsNotPartOfTheIndex(t *testing.T) {
 	mm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: m.height - 1})
 	if got := mm.(model); got.cursor != 0 || !got.cursorHidden {
 		t.Errorf("a click on the status bar should do nothing, got cursor %d hidden %v", got.cursor, got.cursorHidden)
+	}
+}
+
+// chipNamed returns the chip for a Tmux Session, for the Jump tests.
+func chipNamed(t *testing.T, m model, name string) tmuxChip {
+	t.Helper()
+	for _, c := range m.tmuxChips() {
+		if c.Name == name {
+			return c
+		}
+	}
+	t.Fatalf("no chip for session %q", name)
+	return tmuxChip{}
+}
+
+func TestTmuxJumpTargetPicksTheAttentionAgent(t *testing.T) {
+	idle := tmuxChipAgent{Source: "pi", ID: "idle", Pane: "%1"}
+	unread := tmuxChipAgent{Source: "claude", ID: "unread", Unread: true, Pane: "%2"}
+	waiting := tmuxChipAgent{Source: "pi", ID: "waiting", Waiting: true, Pane: "%3"}
+	both := tmuxChipAgent{Source: "pi", ID: "both", Waiting: true, Unread: true, Pane: "%4"}
+	cases := []struct {
+		name   string
+		agents []tmuxChipAgent
+		pane   string
+		id     string
+	}{
+		{"no agents", nil, "", ""},
+		{"no attention", []tmuxChipAgent{idle}, "", ""},
+		{"unread", []tmuxChipAgent{idle, unread}, "%2", "unread"},
+		{"waiting", []tmuxChipAgent{idle, unread, waiting}, "%3", "waiting"},
+		{"waiting beats an earlier unread", []tmuxChipAgent{unread, waiting}, "%3", "waiting"},
+		{"one agent with both", []tmuxChipAgent{idle, both}, "%4", "both"},
+	}
+	for _, c := range cases {
+		pane, id := tmuxJumpTarget(tmuxChip{Agents: c.agents})
+		if pane != c.pane || id != c.id {
+			t.Errorf("%s: tmuxJumpTarget = (%q, %q), want (%q, %q)", c.name, pane, id, c.pane, c.id)
+		}
+	}
+}
+
+func TestTmuxJumpTargetUsesThePaneID(t *testing.T) {
+	// A claude-form Pane carries ':' and '.', which tmux would misread as a
+	// session:window target: the Jump uses the pane's %N id instead.
+	srv := parseTmuxPanes(tmuxPanesFixture)
+	m := barModel(t, srv, liveAgent("claude-live", "claude", "x:y:0.0", StateWaiting))
+	pane, id := tmuxJumpTarget(chipNamed(t, m, "x:y"))
+	if pane != "%19" || id != "claude-live" {
+		t.Errorf("tmuxJumpTarget = (%q, %q), want the %%19 pane and claude-live", pane, id)
+	}
+}
+
+func TestTmuxJumpReadsOnlyTheLandedSession(t *testing.T) {
+	srv := parseTmuxPanes(tmuxPanesFixture)
+	m := barModel(t, srv,
+		liveAgent("a", "pi", "%6", StateIdle), // agent-sessions
+		liveAgent("b", "pi", "%8", StateIdle), // agent-sessions_latest
+	)
+	m.unread = map[string]bool{"a": true, "b": true}
+	mm, cmd := m.jumpTmux(chipNamed(t, m, "agent-sessions"))
+	got := mm.(model)
+	if cmd == nil {
+		t.Error("the Jump should run the [commands] tmux template")
+	}
+	if got.unread["a"] {
+		t.Error("the Jump should read the session it lands on")
+	}
+	if !got.unread["b"] {
+		t.Error("the Jump should read only that one")
+	}
+	if !got.cursorHidden {
+		t.Error("the Jump should hide the cursor highlight until the next key")
+	}
+	// A chip with no Attention agent lands on a Window whose agents are read
+	// already, so nothing changes. _home has no agent at all.
+	mm, cmd = got.jumpTmux(chipNamed(t, got, "_home"))
+	if cmd == nil {
+		t.Error("a chip with no Attention agent should still Jump")
+	}
+	if !mm.(model).unread["b"] {
+		t.Error("a Jump that diverts nowhere should clear nothing")
+	}
+}
+
+func TestTmuxJumpTemplateVars(t *testing.T) {
+	var cfg Config
+	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	tmpl := cfg.Commands["tmux"]
+	if tmpl == "" {
+		t.Fatal("the shipped config should bind [commands] tmux")
+	}
+	for _, want := range []string{"{tmux-session}", "{tmux-target?}"} {
+		if !strings.Contains(tmpl, want) {
+			t.Errorf("the shipped Jump should take %s, got %q", want, tmpl)
+		}
+	}
+	// Outside tmux switch-client fails, so the same line falls back to attach;
+	// inside tmux it moves the client, and does nothing in the current session.
+	if !strings.Contains(tmpl, "switch-client") || !strings.Contains(tmpl, "|| tmux attach") {
+		t.Errorf("the shipped Jump should switch the client, else attach, got %q", tmpl)
+	}
+	line := expandCommand(tmpl, tmuxJumpVars("agent-sessions", "%6"))
+	for _, want := range []string{"'agent-sessions'", "'%6'"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the expanded Jump should contain %s, got %q", want, line)
+		}
+	}
+	// No Attention agent: the target is empty, so tmux keeps its own Window.
+	line = expandCommand(tmpl, tmuxJumpVars("agent-sessions", ""))
+	if !strings.Contains(line, "select-pane -t ''") {
+		t.Errorf("an empty target should expand empty, got %q", line)
+	}
+}
+
+func TestTmuxKeyOpensPickerAttentionFirst(t *testing.T) {
+	srv := parseTmuxPanes(tmuxPanesFixture)
+	m := barModel(t, srv,
+		liveAgent("idle", "pi", "%0", StateIdle),        // _home
+		liveAgent("unread", "claude", "%8", StateIdle),  // agent-sessions_latest
+		liveAgent("waiting", "pi", "%19", StateWaiting), // x:y
+	)
+	m.unread = map[string]bool{"unread": true}
+	mm, _ := m.Update(key("t"))
+	got := mm.(model)
+	if !got.picker.active {
+		t.Fatal("t should open the picker over the Tmux Sessions")
+	}
+	// Every Tmux Session is offered -- the bar's point -- with the ones that
+	// want the user first: waiting, then unread, then tmux's own order.
+	want := []string{"x:y", "agent-sessions_latest", "_home", "agent-sessions", "x.z"}
+	if !slices.Equal(got.picker.items, want) {
+		t.Errorf("picker items = %v, want %v", got.picker.items, want)
+	}
+	// Picking one Jumps exactly as a click does.
+	mm, cmd := got.Update(key("enter"))
+	if cmd == nil {
+		t.Error("picking a session should Jump")
+	}
+	if picked := mm.(model); picked.picker.active {
+		t.Error("the picker should close on pick")
+	}
+}
+
+func TestTmuxKeyPickJumpsAndReads(t *testing.T) {
+	srv := parseTmuxPanes(tmuxPanesFixture)
+	m := barModel(t, srv, liveAgent("unread", "pi", "%6", StateIdle))
+	m.unread = map[string]bool{"unread": true}
+	mm, _ := m.Update(key("t"))
+	mm, cmd := mm.(model).Update(key("enter"))
+	if cmd == nil {
+		t.Error("picking a session should Jump")
+	}
+	if mm.(model).unread["unread"] {
+		t.Error("picking a session should read it, like a click")
+	}
+}
+
+func TestTmuxKeyConfigurable(t *testing.T) {
+	srv := parseTmuxPanes(tmuxPanesFixture)
+	z := barModelWith(t, func(c *Config) { c.Tmux.Key = "z" }, srv)
+	if z.tmuxKey != "z" {
+		t.Fatalf("[tmux] key should be configurable, got %q", z.tmuxKey)
+	}
+	if mm, _ := z.Update(key("z")); !mm.(model).picker.active {
+		t.Error("the configured key should open the picker")
+	}
+	if mm, _ := z.Update(key("t")); mm.(model).picker.active {
+		t.Error("the old key should be unbound once [tmux] key changes")
+	}
+	// An empty key unbinds it, like an empty [commands] binding.
+	off := barModelWith(t, func(c *Config) { c.Tmux.Key = "" }, srv)
+	if mm, _ := off.Update(key("t")); mm.(model).picker.active {
+		t.Error("an empty [tmux] key should unbind the picker")
+	}
+	// Nothing to pick: a notice, not an empty picker.
+	bare := barModelWith(t, func(*Config) {}, nil)
+	if mm, _ := bare.Update(key("t")); mm.(model).picker.active || mm.(model).notice == "" {
+		t.Errorf("with no server the picker should stay shut with a notice, got %+v", mm.(model).notice)
+	}
+}
+
+func TestTmuxChipAtHitsOnlyChips(t *testing.T) {
+	m := barModel(t, parseTmuxPanes(tmuxPanesFixture))
+	m.width = 100
+	chips := m.tmuxChips()
+	nameCap := m.tmuxBarNameCap(chips)
+	x := 0
+	for _, c := range chips {
+		if got, ok := m.tmuxChipAt(x); !ok || got.Name != c.Name {
+			t.Errorf("column %d should hit chip %q, got %q (hit=%v)", x, c.Name, got.Name, ok)
+		}
+		w := lipgloss.Width(m.renderTmuxChip(c, nameCap))
+		if got, ok := m.tmuxChipAt(x + w); ok {
+			t.Errorf("column %d is the gap after %q, but it hit %q", x+w, c.Name, got.Name)
+		}
+		x += w + lipgloss.Width(chipGap)
+	}
+	if _, ok := m.tmuxChipAt(m.width); ok {
+		t.Error("a column past the row should hit nothing")
+	}
+}
+
+func TestTmuxChipClickJumps(t *testing.T) {
+	srv := parseTmuxPanes(tmuxPanesFixture)
+	m := barModel(t, srv, liveAgent("a", "pi", "%6", StateIdle))
+	m.unread = map[string]bool{"a": true}
+	m.width, m.height = 100, 12
+	if m.switchOnClick {
+		t.Fatal("the fixture should not switch on a plain click")
+	}
+	barY := m.pageSize() + 1
+	if barY != m.height-2 {
+		t.Fatalf("the bar should sit above the status bar, got Y=%d for height %d", barY, m.height)
+	}
+	// The agent-sessions chip is the second one; the first is _home.
+	chips := m.tmuxChips()
+	x := lipgloss.Width(m.renderTmuxChip(chips[0], m.tmuxBarNameCap(chips))) + lipgloss.Width(chipGap)
+	mm, cmd := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: x, Y: barY})
+	got := mm.(model)
+	if cmd == nil {
+		t.Fatal("a click on a chip should Jump immediately, whatever [mouse] click_action says")
+	}
+	if got.unread["a"] {
+		t.Error("the click's Jump should read the session it lands on")
+	}
+	if !got.cursorHidden {
+		t.Error("a chip click should not go through the Index's click path")
+	}
+
+	// The gap between chips, the status bar and the help row all do nothing.
+	for _, c := range []struct {
+		name string
+		x, y int
+	}{
+		{"the gap after a chip", x - 1, barY},
+		{"the status bar", x, m.height - 1},
+		{"the help row", x, 0},
+	} {
+		m.unread = map[string]bool{"a": true}
+		mm, cmd := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: c.x, Y: c.y})
+		if cmd != nil || !mm.(model).unread["a"] {
+			t.Errorf("a click on %s should do nothing", c.name)
+		}
+	}
+}
+
+func TestTmuxJumpToADeadSessionNotices(t *testing.T) {
+	srv := pollTmux()
+	if srv == nil {
+		t.Skip("no reachable tmux server")
+	}
+	m := barModel(t, srv)
+	m.bgExec = true // run the Jump detached, so the test can wait for it
+	m.tmuxJump = "tmux switch-client -t {tmux-session} 2>/dev/null || tmux attach -t {tmux-session}"
+	_, cmd := m.jumpTmux(tmuxChip{Name: "agent-sessions-gone-xyz"})
+	if cmd == nil {
+		t.Fatal("a Jump to a dead session should still run its command")
+	}
+	done, ok := cmd().(execDoneMsg)
+	if !ok || done.err == nil {
+		t.Fatalf("the Jump to a missing session should fail, got %#v", done)
+	}
+	mm, _ := m.Update(done)
+	if notice := mm.(model).notice; !strings.Contains(notice, "command:") {
+		t.Errorf("a failed Jump should notice instead of crashing, got %q", notice)
 	}
 }

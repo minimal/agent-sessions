@@ -247,6 +247,8 @@ type model struct {
 	enterBySource      map[string]string // per-source override of the "enter" command (key = Source)
 	tmuxGlyph          string            // marker for tmux-attachable sessions; "" hides it
 	tmuxBar            bool              // show the Tmux Bar row ([tmux] bar)
+	tmuxKey            string            // opens the Tmux Session picker; "" unbinds it
+	tmuxJump           string            // [commands] tmux: the Jump template
 	tmuxSrv            *tmuxServer       // last tmux poll; nil while no server is reachable
 	maxIcons           int               // agent glyphs per Tmux Chip before "+N"; 0 hides them
 	bgGlyph            string            // marker for detached `claude --background` sessions; "" hides it
@@ -398,6 +400,8 @@ func newModel(cfg Config) model {
 		enterBySource:      enterBySource,
 		tmuxGlyph:          cfg.Tmux.Glyph,
 		tmuxBar:            cfg.Tmux.Bar,
+		tmuxKey:            cfg.Tmux.Key,
+		tmuxJump:           cfg.Commands["tmux"],
 		maxIcons:           max(0, cfg.Tmux.MaxIcons),
 		bgGlyph:            cfg.Bg.Glyph,
 		agentGlyphs:        agentGlyphs,
@@ -797,13 +801,11 @@ const spinnerEvery = 120 * time.Millisecond
 
 func (m model) loadCmd() tea.Msg {
 	sessions, err := m.loader.Load()
-	// The Bar re-queries tmux on this same 2-second poll. It reads the server
-	// directly, never the filtered Index, so no filter can hide a workspace.
-	var srv *tmuxServer
-	if m.tmuxBar {
-		srv = pollTmux()
-	}
-	return sessionsLoadedMsg{sessions: sessions, tmux: srv, err: err}
+	// The Bar and the Jump re-query tmux on this same 2-second poll. They read
+	// the server directly, never the filtered Index, so no filter can hide a
+	// workspace. The poll runs even with [tmux] bar = false: that setting hides
+	// the row, not the sessions the Jump reaches.
+	return sessionsLoadedMsg{sessions: sessions, tmux: pollTmux(), err: err}
 }
 
 func tickCmd() tea.Cmd {
@@ -1003,6 +1005,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loading = true
 			m.status = "Refreshing..."
 			return m, m.loadCmd
+		case m.tmuxKey:
+			// The built-in keys win a collision, so a misconfigured [tmux] key
+			// can never shadow Quit or Trash. An empty key matches nothing.
+			return m.tmuxPicker()
 		}
 	}
 	m.clampOffset()
@@ -1058,8 +1064,19 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.clampOffset()
 		return m, nil
 	}
-	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft ||
-		msg.Y < 1 || msg.Y > m.pageSize() {
+	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft || msg.Y < 1 {
+		return m, nil
+	}
+	// A click on a chip Jumps immediately and ignores [mouse] click_action: a
+	// chip has no selection state to set, so there is nothing to select first.
+	if m.tmuxBarShown() && msg.Y == m.pageSize()+1 {
+		c, ok := m.tmuxChipAt(msg.X)
+		if !ok {
+			return m, nil
+		}
+		return m.jumpTmux(c)
+	}
+	if msg.Y > m.pageSize() {
 		return m, nil
 	}
 	// The top bar is row 0 and the status bar sits below the page, so display
@@ -1694,12 +1711,14 @@ func (m model) View() string {
 	return b.String()
 }
 
-// tmuxChipAgent is one live agent on a Tmux Chip: the Agent Source mark and its
-// Attention.
+// tmuxChipAgent is one live agent on a Tmux Chip: the Agent Source mark, its
+// Attention, and what a Jump needs — the agent session and its Pane.
 type tmuxChipAgent struct {
 	Source  string
 	Waiting bool
 	Unread  bool
+	ID      string // the agent session's id, to read it on a Jump
+	Pane    string // the pane's %N id, the Jump's target
 }
 
 // tmuxChip is one Tmux Session in the Tmux Bar.
@@ -1755,7 +1774,7 @@ func (m model) tmuxChips() []tmuxChip {
 		if !ok {
 			continue // a pane on another server, or one that has since closed
 		}
-		i, ok := index[name]
+		i, ok := index[name.session]
 		if !ok {
 			continue
 		}
@@ -1763,6 +1782,8 @@ func (m model) tmuxChips() []tmuxChip {
 			Source:  s.Source,
 			Waiting: s.State == StateWaiting,
 			Unread:  m.unread[s.ID] && s.State == StateIdle,
+			ID:      s.ID,
+			Pane:    name.id,
 		})
 	}
 	return chips
@@ -1777,17 +1798,7 @@ func (m model) tmuxBarView() string {
 	if len(chips) == 0 {
 		return ""
 	}
-	widest := 0
-	for _, c := range chips {
-		widest = max(widest, lipgloss.Width(c.Name))
-	}
-	// Names shrink together, never below the floor; only then is the tail cut.
-	nameCap := widest
-	row := m.renderTmuxBar(chips, nameCap)
-	for nameCap > chipNameFloor && lipgloss.Width(row) > m.width {
-		nameCap--
-		row = m.renderTmuxBar(chips, nameCap)
-	}
+	row := m.renderTmuxBar(chips, m.tmuxBarNameCap(chips))
 	row = trunc(row, m.width)
 	// The slack is its own segment: the last chip's reset has already cleared the
 	// Bar style by the time the padding is emitted.
@@ -1875,6 +1886,129 @@ func (m model) barCell(st lipgloss.Style, text string) string {
 	return overlay(m.styles.bar, st).Render(text)
 }
 
+// tmuxBarNameCap is the width every chip name shrinks to: the widest name,
+// reduced while the row overflows and never below the floor. The hit test and
+// the renderer both use it, so a click lands on the chip it looks like.
+func (m model) tmuxBarNameCap(chips []tmuxChip) int {
+	cap := 0
+	for _, c := range chips {
+		cap = max(cap, lipgloss.Width(c.Name))
+	}
+	for cap > chipNameFloor && lipgloss.Width(m.renderTmuxBar(chips, cap)) > m.width {
+		cap--
+	}
+	return cap
+}
+
+// tmuxChipAt returns the chip under column x on the Tmux Bar's row, laid out
+// exactly as the row was drawn. false when x falls in a gap, or past the cut.
+func (m model) tmuxChipAt(x int) (tmuxChip, bool) {
+	if x >= m.width {
+		return tmuxChip{}, false // past the row's cut
+	}
+	chips := m.tmuxChips()
+	nameCap := m.tmuxBarNameCap(chips)
+	start := 0
+	for _, c := range chips {
+		w := lipgloss.Width(m.renderTmuxChip(c, nameCap))
+		if x >= start && x < start+w {
+			return c, true
+		}
+		start += w + lipgloss.Width(chipGap)
+	}
+	return tmuxChip{}, false
+}
+
+// tmuxJumpTarget returns the Pane a Jump selects and the agent session it
+// belongs to: the first waiting agent, else the first Unread one, because
+// waiting is blocked on the user now. Both empty means no agent on the chip
+// wants the user, so the Jump leaves tmux on the session's last-active Window.
+func tmuxJumpTarget(c tmuxChip) (pane, sessionID string) {
+	for _, a := range c.Agents {
+		if a.Waiting && a.Pane != "" {
+			return a.Pane, a.ID
+		}
+	}
+	for _, a := range c.Agents {
+		if a.Unread && a.Pane != "" {
+			return a.Pane, a.ID
+		}
+	}
+	return "", ""
+}
+
+// tmuxJumpVars are the Jump template's placeholders: the Tmux Session to switch
+// to, and the Pane to select first (empty when the Jump does not divert).
+func tmuxJumpVars(session, pane string) map[string]string {
+	return map[string]string{
+		"tmux-session": session,
+		"tmux-target":  pane,
+		"tmux-target?": pane,
+	}
+}
+
+// jumpTmux moves the terminal to a Tmux Session: the Pane of an agent that
+// wants the user when there is one, otherwise tmux's own last-active Window.
+// It is a [commands] tmux template, so it stays configurable, and it reads the
+// agent session it lands on — and only that one. A chip with no Attention agent
+// lands on a Window whose agents are already read, so there is nothing to clear.
+func (m model) jumpTmux(c tmuxChip) (tea.Model, tea.Cmd) {
+	if m.tmuxJump == "" {
+		return m, nil // [commands] tmux = "" unbinds the Jump, click included
+	}
+	pane, id := tmuxJumpTarget(c)
+	delete(m.unread, id) // a Jump reads what it lands on; delete of "" is a no-op
+	m.notice = ""
+	m.cursorHidden = true // hide the highlight until the next key or focus
+	return m, execCmd(m.tmuxJump, tmuxJumpVars(c.Name, pane), m.bgExec)
+}
+
+// tmuxPicker asks which Tmux Session to Jump to, over the same sessions the Bar
+// shows. Attention comes first: the picker is transient, so it can afford the
+// relevance-first order the Bar cannot, where chips must never move.
+func (m model) tmuxPicker() (tea.Model, tea.Cmd) {
+	chips := tmuxAttentionFirst(m.tmuxChips())
+	if len(chips) == 0 {
+		m.notice = "No tmux sessions."
+		return m, nil
+	}
+	items := make([]string, len(chips))
+	byName := make(map[string]tmuxChip, len(chips))
+	for i, c := range chips {
+		items[i] = c.Name
+		byName[c.Name] = c
+	}
+	label := func(name string) string {
+		c := byName[name]
+		return ansi.Strip(m.renderTmuxChip(c, lipgloss.Width(c.Name)))
+	}
+	m.openPicker("Jump to a tmux session", items, label,
+		func(m model, name string) (tea.Model, tea.Cmd) {
+			return m.jumpTmux(byName[name])
+		})
+	return m, nil
+}
+
+// tmuxAttentionFirst orders chips for the picker: a waiting agent ranks above
+// an Unread one, and tmux's own order holds within a rank.
+func tmuxAttentionFirst(chips []tmuxChip) []tmuxChip {
+	rank := func(c tmuxChip) int {
+		r := 0
+		for _, a := range c.Agents {
+			if a.Waiting {
+				return 2
+			}
+			if a.Unread {
+				r = 1
+			}
+		}
+		return r
+	}
+	out := append([]tmuxChip(nil), chips...)
+	sort.SliceStable(out, func(i, j int) bool { return rank(out[i]) > rank(out[j]) })
+	return out
+}
+
 // pickerView renders the selection overlay: the narrowed item list, with
 // the query editor and match count in the bottom bar.
 func (m model) pickerView() string {
@@ -1902,9 +2036,9 @@ func (m model) pickerView() string {
 
 // helpView lists the built-in keys and every configured command.
 func (m model) helpView() string {
-	mouseHelp := "    mouse              click a row to select, double-click to switch; wheel scrolls"
+	mouseHelp := "    mouse              click a row to select, double-click to switch; a chip jumps; wheel scrolls"
 	if m.switchOnClick {
-		mouseHelp = "    mouse              click a row to select and switch; wheel scrolls"
+		mouseHelp = "    mouse              click a row to select and switch; a chip jumps; wheel scrolls"
 	}
 	lines := []string{
 		"",
@@ -1917,6 +2051,12 @@ func (m model) helpView() string {
 		"    o                  toggle showing only sessions with a running agent process",
 		"    a                  cycle the age window: all, 7 days, 30 days",
 		"    s                  cycle the sort order: activity, repo, active,repo",
+	}
+	if m.tmuxKey != "" {
+		lines = append(lines, fmt.Sprintf(
+			"    %-18s jump to a tmux session (picker, Attention first)", m.tmuxKey))
+	}
+	lines = append(lines,
 		"    d                  move session to Trash (large sessions: type yes)",
 		mouseHelp,
 		"    r                  refresh now",
@@ -1938,7 +2078,7 @@ func (m model) helpView() string {
 		"    visible value, clamped to a per-column min/max. Set max = 0 to hide",
 		"    a column; set min = max to pin it to a fixed width.",
 		"",
-	}
+	)
 	if m.ciToken != "" {
 		lines = append(lines,
 			"  CI column: the branch's latest CircleCI pipeline, workflows combined",
@@ -1964,6 +2104,8 @@ func (m model) helpView() string {
 		"    {pid}               pid of the running claude process (live only)",
 		"    {pane}              tmux pane hosting the process (live, in tmux)",
 		"    {jobid}             id for `claude attach`/`stop` (live, --background only)",
+		"    {tmux-session}      Tmux Session a chip's Jump switches to ([commands] tmux)",
+		"    {tmux-target?}      Pane that Jump selects first; empty when none wants you",
 		"    {pid?} / {pane?} / {jobid?}   optional forms: expand empty instead of blocking",
 		"    {ci-build-url}      the latest CircleCI build's page (needs [circleci])",
 		"    {project-picker}    asks: pick a project from every known one",

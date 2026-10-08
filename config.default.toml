@@ -244,6 +244,10 @@ bar = true
 # Agent glyphs shown per chip before a "+N" overflow count. 0 hides the
 # agent marks, leaving each chip its name and Window count.
 max_icons = 3
+# Key that opens a picker over the Tmux Sessions, Attention first, and Jumps
+# to the one picked. A built-in key wins a collision, so choose one that no
+# built-in uses (see ?). Set to "" to unbind it.
+key = "t"
 
 [bg]
 # Marker shown next to sessions running as a detached `claude --background`
@@ -323,6 +327,19 @@ else
         tmux send-keys -t "$p" "claude --resume {id}" Enter
     fi
 fi
+'''
+
+# The Tmux Bar's Jump, run when a chip is clicked or picked from the tmux
+# picker. {tmux-session} is the Tmux Session to switch to; {tmux-target} is
+# the Pane to select first, set only when an agent in that session is waiting
+# or unread, and empty otherwise so tmux restores the session's last-active
+# Window. The lines are separate so a failed select-pane cannot short-circuit
+# the switch, and switch-client does nothing when the session is the current
+# one, so attach only runs outside tmux. Set it to "" to unbind the Jump.
+tmux = '''
+    tmux select-pane -t {tmux-target?} 2>/dev/null
+    tmux select-window -t {tmux-target?} 2>/dev/null
+    tmux switch-client -t {tmux-session} 2>/dev/null || tmux attach -t {tmux-session}
 '''
 
 # New claude in a fresh tmux window: pick a project, type the first

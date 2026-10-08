@@ -14,6 +14,15 @@ type paneInfo struct {
 	Name string
 }
 
+// tmuxPane is one pane on the server, in the forms the app needs: the id form a
+// Jump targets, the session:window.pane form an adapter may have recorded, and
+// the Tmux Session the pane belongs to.
+type tmuxPane struct {
+	id      string // %N
+	name    string // session:window.pane
+	session string // the pane's Tmux Session
+}
+
 // tmuxSession is one Tmux Session on the server, as the Tmux Bar sees it.
 type tmuxSession struct {
 	id      string // $N
@@ -23,7 +32,7 @@ type tmuxSession struct {
 
 // tmuxServer is one poll of the tmux server the Tmux Bar maps: its sessions in
 // tmux's own order, the session the attached client is in, and a lookup from
-// each pane's recorded forms to its session name.
+// each pane's recorded forms to its pane.
 //
 // byPane is the attribution map. Session.Pane holds one of two forms: pi's
 // marker writes $TMUX_PANE (the %N id form) and claude writes
@@ -32,8 +41,8 @@ type tmuxSession struct {
 // matched exactly.
 type tmuxServer struct {
 	sessions []tmuxSession
-	current  string            // $N of the attached client's session; "" outside tmux
-	byPane   map[string]string // %N and session:window.pane -> session name
+	current  string              // $N of the attached client's session; "" outside tmux
+	byPane   map[string]tmuxPane // %N and session:window.pane -> pane
 }
 
 // pollTmux reads the server in one list-panes call: every pane carries its
@@ -53,7 +62,7 @@ func pollTmux() *tmuxServer {
 
 // parseTmuxPanes builds the server snapshot from a `tmux list-panes -a` result.
 func parseTmuxPanes(out string) *tmuxServer {
-	srv := &tmuxServer{byPane: map[string]string{}}
+	srv := &tmuxServer{byPane: map[string]tmuxPane{}}
 	seen := map[string]bool{}
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		fields := strings.SplitN(line, "\t", 5)
@@ -66,8 +75,9 @@ func parseTmuxPanes(out string) *tmuxServer {
 			n, _ := strconv.Atoi(windows)
 			srv.sessions = append(srv.sessions, tmuxSession{id: id, name: name, windows: n})
 		}
-		srv.byPane[paneID] = name
-		srv.byPane[paneName] = name
+		pane := tmuxPane{id: paneID, name: paneName, session: name}
+		srv.byPane[paneID] = pane
+		srv.byPane[paneName] = pane
 	}
 	return srv
 }
