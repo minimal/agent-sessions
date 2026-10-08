@@ -52,6 +52,13 @@ faint = true
 [styles.bar]       # the help and status bars
 reverse = true
 
+[styles.chip_current]  # the Tmux Bar chip for the session this TUI runs in
+# Every Tmux Bar chip is a pill in [styles.bar]; this layers on top of that one
+# chip, so "you are here" reads without relying on colour. Add an fg here for a
+# stronger mark: over the pill's reverse video a foreground colour shows as the
+# tab's background, which is how tmux itself marks the active tab.
+bold = true
+
 [styles.selected]  # the cursor row
 reverse = true
 # With [selection] colors = true, reverse is ignored and this section's bg

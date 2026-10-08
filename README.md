@@ -161,8 +161,8 @@ defaults.
 Each UI element is a `[styles.*]` section accepting `fg`/`bg` (ANSI/256
 number or `#rrggbb` hex) and `bold`/`faint`/`reverse` booleans. Status
 elements: `running`, `waiting`, `idle`, `unread`, `offline`, `dimmed`. Chrome:
-`bar`, `selected`, `preview`. Columns: `index`, `time`, `project`, `branch`, `model`,
-`subject`.
+`bar`, `selected`, `preview`, `chip_current`. Columns: `index`, `time`,
+`project`, `branch`, `model`, `subject`.
 
 ```toml
 [styles.running]
@@ -360,9 +360,13 @@ session you opened.
 The `[tmux]` section sets the marker shown on tmux-attachable sessions, and
 the Tmux Bar: one row above the status bar holding a chip per tmux session on
 the server, so a workspace stays reachable even when the Index filters hide
-it. Clicking a chip, or picking a session from the `t` picker, jumps there:
-tmux's last-active window, or the pane of an agent that is waiting or unread.
-The jump is the `[commands] tmux` template, so it stays configurable.
+it. Each chip is a pill in `[styles.bar]`, and the chip for the session the
+TUI itself runs in carries a `▸` marker plus `[styles.chip_current]` — add an
+`fg` there for a louder mark, since over the pill's reverse video a foreground
+colour shows as the tab's background. Clicking a chip, or picking a session
+from the `t` picker, jumps there: tmux's last-active window, or the pane of an
+agent that is waiting or unread. The jump is the `[commands] tmux` template,
+so it stays configurable.
 
 ```toml
 [tmux]

@@ -472,25 +472,104 @@ func TestTmuxBarOverflow(t *testing.T) {
 	}
 }
 
-func TestTmuxBarEveryRunIsStyled(t *testing.T) {
+// TestTmuxBarChipsArePillsOnAPlainField pins the Bar's tmux-tab look: every
+// chip is its own reverse-video pill, and the field between and after the chips
+// is not, so a row of chips reads as separate tabs rather than one band of text.
+func TestTmuxBarChipsArePillsOnAPlainField(t *testing.T) {
 	prev := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	defer lipgloss.SetColorProfile(prev)
 
 	m := barModel(t, parseTmuxPanes(tmuxPanesFixture),
 		liveAgent("a", "pi", "%6", StateIdle))
-	m.width = 60
-	row := m.tmuxBarView()
-	// Text right after a reset would render in the terminal's own colours: the
-	// trailing slack must be a styled run of its own, like every chip.
-	if strings.Contains(row, "\x1b[0m ") || !strings.HasSuffix(row, "\x1b[0m") {
-		t.Errorf("every run of the bar should carry a style, got %q", row)
+	m.width = 200 // room to spare, so the slack after the last chip is obvious
+	chips := m.tmuxChips()
+	nameCap := m.tmuxBarNameCap(chips)
+
+	// Every chip is a pill: drawn in the reverse [styles.bar], padded on both
+	// sides. The padding is what separates it from its neighbours.
+	for _, c := range chips {
+		if !m.chipStyle(c).GetReverse() {
+			t.Errorf("chip %q should be drawn in the pill style", c.Name)
+		}
+		plain := ansi.Strip(m.renderTmuxChip(c, nameCap))
+		if !strings.HasPrefix(plain, chipPad) || !strings.HasSuffix(plain, chipPad) {
+			t.Errorf("chip %q should be padded into a pill, got %q", c.Name, plain)
+		}
 	}
-	// The current session's marker is bold, without reverse: Attention owns that.
+	// The field the pills sit on is plain. A reverse run here would merge the
+	// chips back into one continuous band, which is what the pills exist to
+	// stop -- so this is pinned at the escape level.
+	if field := m.chipField(chipGap); strings.Contains(field, "\x1b[") {
+		t.Errorf("the field between chips should be plain, got %q", field)
+	}
+	// The row's trailing slack is that same plain field.
+	row := m.tmuxBarView()
+	if !strings.HasSuffix(row, "  ") {
+		t.Errorf("the slack should be plain padding, got %q", row)
+	}
+}
+
+// TestTmuxBarCurrentChipIsDistinct pins the "you are here" mark. Every chip is
+// now a pill, so the current one is marked with [styles.chip_current] and its
+// "▸" marker rather than by looking different at a glance.
+//
+// Note what this style must not use: underline. lipgloss routes whitespace
+// through a separate space styler when a style is underlined, and that styler
+// does not inherit the pill's reverse -- a chip padded with underlined spaces
+// loses the padding's background, so the pill opens a notch. Bold, a colour,
+// and reverse all survive whitespace.
+func TestTmuxBarCurrentChipIsDistinct(t *testing.T) {
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(prev)
+
+	m := barModel(t, parseTmuxPanes(tmuxPanesFixture))
+	m.width = 100
 	m.tmuxSrv.current = "$4"
-	row = m.tmuxBarView()
-	if !strings.Contains(row, "▸ ") || strings.Contains(row, "\x1b[7;1m▸") {
-		t.Errorf("the current chip should be bold with a plain marker, got %q", row)
+	chips := m.tmuxChips()
+
+	var current *tmuxChip
+	for i, c := range chips {
+		if c.Current {
+			current = &chips[i]
+			break
+		}
+	}
+	if current == nil {
+		t.Fatalf("no chip is marked current for session $4, got %+v", chips)
+	}
+	st := m.chipStyle(*current)
+	if !st.GetBold() {
+		t.Error("the current chip should be bold by default, so it reads on a row of pills")
+	}
+	if st.GetUnderline() {
+		t.Error("the current chip must not be underlined: lipgloss would drop the pill's reverse from its padding")
+	}
+	if !st.GetReverse() {
+		t.Error("the current chip should keep the pill every other chip draws")
+	}
+	// Only the current chip is marked, so the mark still means something.
+	for _, c := range chips {
+		if c.Current {
+			continue
+		}
+		if other := m.chipStyle(c); other.GetBold() {
+			t.Errorf("chip %q should not carry the current style, got bold=%v", c.Name, other.GetBold())
+		}
+	}
+	// The marker survives, so the chip is identifiable without colour.
+	if chip := ansi.Strip(m.renderTmuxChip(*current, 20)); !strings.Contains(chip, "▸ "+current.Name) {
+		t.Errorf("the current chip should keep its marker, got %q", chip)
+	}
+	// The padding carries the pill's reverse too. lipgloss renders a
+	// whitespace-only string through a separate space styler for some attribute
+	// sets, dropping the other attributes there, so a styled pad is not a given:
+	// if it lost the reverse, the current chip's pill would open a notch at both
+	// ends. Pinned on the bytes the app emits.
+	raw := m.renderTmuxChip(*current, 20)
+	if leading := raw[:strings.Index(raw, " ")]; !strings.Contains(leading, "7") {
+		t.Errorf("the current chip's leading pad should be reverse, got %q", raw)
 	}
 }
 

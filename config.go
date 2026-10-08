@@ -31,7 +31,10 @@ type Config struct {
 		Offline  StyleConfig `toml:"offline"`
 		Dimmed   StyleConfig `toml:"dimmed"`
 		Bar      StyleConfig `toml:"bar"`
-		Selected StyleConfig `toml:"selected"`
+		// ChipCurrent marks the Tmux Bar chip for the session the TUI runs in,
+		// on top of the pill every chip already draws.
+		ChipCurrent StyleConfig `toml:"chip_current"`
+		Selected    StyleConfig `toml:"selected"`
 		Preview  StyleConfig `toml:"preview"`
 		Index    StyleConfig `toml:"index"`      // the leading row number
 		Time     StyleConfig `toml:"time"`       // the last-activity timestamp (older dates)
