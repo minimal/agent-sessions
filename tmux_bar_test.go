@@ -13,18 +13,23 @@ import (
 	"github.com/muesli/termenv"
 )
 
-// tmuxPanesFixture mirrors a real `tmux list-panes -a` result: sessions in
-// tmux's order, several panes per session, and a session whose name contains
-// the ':' and '.' separators the pane names use.
+// tmuxPanesFixture mirrors a real `tmux list-panes -a` result: session id, name
+// and Window count, the pane id and its session:window.pane name, then the
+// read-tracking columns (attached clients, window active, window zoomed, pane
+// active). It covers a name holding ':' and one holding '.', and the three ways
+// a pane can be off screen: no attached client, not the session's current
+// Window, and a zoomed Window whose pane is not the focused one.
 const tmuxPanesFixture = "\n" +
-	"$0\t_home\t1\t%0\t_home:0.0\n" +
-	"$4\tagent-sessions\t5\t%6\tagent-sessions:0.0\n" +
-	"$4\tagent-sessions\t5\t%13\tagent-sessions:1.0\n" +
-	"$4\tagent-sessions\t5\t%7\tagent-sessions:2.0\n" +
-	"$5\tagent-sessions_latest\t2\t%8\tagent-sessions_latest:0.0\n" +
-	"$5\tagent-sessions_latest\t2\t%12\tagent-sessions_latest:3.0\n" +
-	"$6\tx:y\t1\t%19\tx:y:0.0\n" +
-	"$7\tx.z\t1\t%20\tx.z:0.0\n"
+	"$0\t_home\t1\t%0\t_home:0.0\t1\t1\t0\t1\n" + // on screen
+	"$4\tagent-sessions\t5\t%6\tagent-sessions:0.0\t1\t1\t1\t1\n" + // zoomed, focused: on screen
+	"$4\tagent-sessions\t5\t%13\tagent-sessions:1.0\t1\t1\t1\t0\n" + // zoomed, unfocused: off
+	"$4\tagent-sessions\t5\t%7\tagent-sessions:2.0\t1\t0\t0\t1\n" + // not the current Window: off
+	"$4\tagent-sessions\t5\t%14\tagent-sessions:3.0\t0\t1\t0\t1\n" + // no client attached: off
+	"$4\tagent-sessions\t5\t%18\tagent-sessions:4.0\t1\t1\t0\t0\n" + // side by side: on screen
+	"$5\tagent-sessions_latest\t2\t%8\tagent-sessions_latest:0.0\t0\t1\t0\t1\n" +
+	"$5\tagent-sessions_latest\t2\t%12\tagent-sessions_latest:3.0\t0\t0\t0\t1\n" +
+	"$6\tx:y\t1\t%19\tx:y:0.0\t1\t1\t0\t1\n" +
+	"$7\tx.z\t1\t%20\tx.z:0.0\t0\t1\t0\t1\n"
 
 func TestParseTmuxPanesKeepsTmuxOrderAndWindows(t *testing.T) {
 	srv := parseTmuxPanes(tmuxPanesFixture)
@@ -839,5 +844,104 @@ func TestTmuxJumpToADeadSessionNotices(t *testing.T) {
 	mm, _ := m.Update(done)
 	if notice := mm.(model).notice; !strings.Contains(notice, "command:") {
 		t.Errorf("a failed Jump should notice instead of crashing, got %q", notice)
+	}
+}
+
+func TestParseTmuxPanesMarksOnScreenPanes(t *testing.T) {
+	srv := parseTmuxPanes(tmuxPanesFixture)
+	on := []string{"%0", "_home:0.0", "%6", "agent-sessions:0.0", "%18", "agent-sessions:4.0", "%19", "x:y:0.0"}
+	off := []string{
+		"%13", "agent-sessions:1.0", // zoomed Window, pane not focused
+		"%7", "agent-sessions:2.0", // not the session's current Window
+		"%14", "agent-sessions:3.0", // no client attached
+		"%8", "agent-sessions_latest:0.0", // no client attached
+		"%12", "agent-sessions_latest:3.0", // no client attached, not current
+		"%20", "x.z:0.0", // no client attached
+	}
+	for _, key := range on {
+		if !srv.onScreen[key] {
+			t.Errorf("%s is on screen in an attached client, want it marked", key)
+		}
+	}
+	for _, key := range off {
+		if srv.onScreen[key] {
+			t.Errorf("%s is off screen, want it unmarked", key)
+		}
+	}
+}
+
+func TestReadOnScreenClearsOnlyVisiblePanes(t *testing.T) {
+	srv := parseTmuxPanes(tmuxPanesFixture)
+	m := barModel(t, srv,
+		liveAgent("focused", "pi", "%6", StateIdle),       // zoomed Window, focused pane
+		liveAgent("side", "claude", "x:y:0.0", StateIdle), // side by side, ':' in the name
+		liveAgent("unfocused", "pi", "%13", StateIdle),    // zoomed Window, other pane
+		liveAgent("otherwin", "pi", "%7", StateIdle),      // another Window
+		liveAgent("detached", "pi", "%14", StateIdle),     // no client attached
+	)
+	m.unread = map[string]bool{
+		"focused": true, "side": true, "unfocused": true, "otherwin": true, "detached": true,
+	}
+	m.readOnScreen(m.all)
+	for _, id := range []string{"focused", "side"} {
+		if m.unread[id] {
+			t.Errorf("%s has its Pane on screen: looking at it reads it", id)
+		}
+	}
+	for _, id := range []string{"unfocused", "otherwin", "detached"} {
+		if !m.unread[id] {
+			t.Errorf("%s is not on screen: it stays unread until acted on", id)
+		}
+	}
+}
+
+func TestTurnFinishingOnScreenIsNeverUnread(t *testing.T) {
+	srv := parseTmuxPanes(tmuxPanesFixture)
+	m := barModel(t, srv,
+		liveAgent("visible", "pi", "%18", StateIdle),    // side by side, on screen
+		liveAgent("hidden", "claude", "%13", StateIdle), // zoomed away
+	)
+	// Both were mid-turn at the last poll, so this load sees them finish.
+	m.seen = map[string]SessionState{"visible": StateRunning, "hidden": StateRunning}
+	mm, _ := m.Update(sessionsLoadedMsg{sessions: m.all, tmux: srv})
+	got := mm.(model)
+	if got.unread["visible"] {
+		t.Error("a turn that finished while its Pane was on screen is not unread")
+	}
+	if !got.unread["hidden"] {
+		t.Error("a turn that finished off screen is unread until acted on")
+	}
+}
+
+func TestNoServerFallsBackToActingOnly(t *testing.T) {
+	m := barModel(t, nil, liveAgent("a", "pi", "%6", StateIdle))
+	m.unread = map[string]bool{"a": true}
+	m.readOnScreen(m.all)
+	if !m.unread["a"] {
+		t.Error("with no tmux server, only acting on a session reads it")
+	}
+	m.cursor = 0
+	if _, _ = m.runCommand("true"); m.unread["a"] {
+		t.Error("acting on a session through the TUI should still read it")
+	}
+}
+
+func TestPollTmuxLiveOnScreen(t *testing.T) {
+	srv := pollTmux()
+	if srv == nil {
+		t.Skip("no reachable tmux server")
+	}
+	for key := range srv.onScreen {
+		if _, ok := srv.byPane[key]; !ok {
+			t.Errorf("on-screen pane %q is not a pane on the server", key)
+		}
+	}
+	// Inside tmux, an attached client shows its session's current Window, which
+	// holds at least one pane. Outside tmux nothing is on screen.
+	if srv.current != "" && len(srv.onScreen) == 0 {
+		t.Error("inside tmux the current Window should have panes on screen")
+	}
+	if srv.current == "" && len(srv.onScreen) != 0 {
+		t.Error("outside tmux, with no client, nothing can be on screen")
 	}
 }

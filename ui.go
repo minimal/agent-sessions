@@ -858,6 +858,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		sortSessions(msg.sessions, parseSortDims(m.sortGroup))
 		m.observeRunning(msg.sessions)
 		m.detectUnread(msg.sessions)
+		m.readOnScreen(msg.sessions)
 		m.all = msg.sessions
 		m.applyFilter()
 		m.computeWidths()
@@ -1349,6 +1350,23 @@ func (m *model) detectUnread(sessions []Session) {
 	for id := range m.unread {
 		if !present[id] {
 			delete(m.unread, id)
+		}
+	}
+}
+
+// readOnScreen clears Unread for every session whose Pane an attached tmux
+// client has on screen: read means seen (docs/adr/0001-read-means-seen.md). It
+// runs after detectUnread, so a turn that finishes while you are looking at its
+// Pane never shows as unread at all. With no reachable server there is no
+// on-screen set, and reading falls back to acting on the session through the
+// TUI.
+func (m *model) readOnScreen(sessions []Session) {
+	if m.tmuxSrv == nil {
+		return
+	}
+	for _, s := range sessions {
+		if s.Pane != "" && m.tmuxSrv.onScreen[s.Pane] {
+			delete(m.unread, s.ID)
 		}
 	}
 }

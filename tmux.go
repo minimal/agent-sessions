@@ -31,27 +31,36 @@ type tmuxSession struct {
 }
 
 // tmuxServer is one poll of the tmux server the Tmux Bar maps: its sessions in
-// tmux's own order, the session the attached client is in, and a lookup from
-// each pane's recorded forms to its pane.
+// tmux's own order, the session the attached client is in, a lookup from each
+// pane's recorded forms to its pane, and the panes an attached client has on
+// screen.
 //
 // byPane is the attribution map. Session.Pane holds one of two forms: pi's
 // marker writes $TMUX_PANE (the %N id form) and claude writes
 // session:window.pane. tmux allows ':' and '.' in session names, so a stored
 // string is never split back into its parts: both forms are listed as keys and
 // matched exactly.
+//
+// onScreen answers "has the user seen this?" for read tracking: the pane is in
+// its session's current Window, and the Window is not zoomed or the pane is the
+// focused one (docs/adr/0001-read-means-seen.md). Both forms are keys, as in
+// byPane.
 type tmuxServer struct {
 	sessions []tmuxSession
 	current  string              // $N of the attached client's session; "" outside tmux
 	byPane   map[string]tmuxPane // %N and session:window.pane -> pane
+	onScreen map[string]bool     // %N and session:window.pane -> on screen
 }
 
 // pollTmux reads the server in one list-panes call: every pane carries its
 // session's id, name and Window count, so a session's first appearance gives
 // tmux's own session order, and the pane's two recorded forms give attribution.
-// Returns nil when no server is reachable, which is what hides the Tmux Bar.
+// Returns nil when no server is reachable, which is what hides the Tmux Bar and
+// falls read tracking back to acting on a session through the TUI.
 func pollTmux() *tmuxServer {
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{session_id}\t#{session_name}\t#{session_windows}\t#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}").Output()
+		"#{session_id}\t#{session_name}\t#{session_windows}\t#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}\t"+
+			"#{session_attached}\t#{window_active}\t#{window_zoomed_flag}\t#{pane_active}").Output()
 	if err != nil {
 		return nil
 	}
@@ -62,11 +71,11 @@ func pollTmux() *tmuxServer {
 
 // parseTmuxPanes builds the server snapshot from a `tmux list-panes -a` result.
 func parseTmuxPanes(out string) *tmuxServer {
-	srv := &tmuxServer{byPane: map[string]tmuxPane{}}
+	srv := &tmuxServer{byPane: map[string]tmuxPane{}, onScreen: map[string]bool{}}
 	seen := map[string]bool{}
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		fields := strings.SplitN(line, "\t", 5)
-		if len(fields) != 5 {
+		fields := strings.SplitN(line, "\t", 9)
+		if len(fields) != 9 {
 			continue
 		}
 		id, name, windows, paneID, paneName := fields[0], fields[1], fields[2], fields[3], fields[4]
@@ -78,6 +87,14 @@ func parseTmuxPanes(out string) *tmuxServer {
 		pane := tmuxPane{id: paneID, name: paneName, session: name}
 		srv.byPane[paneID] = pane
 		srv.byPane[paneName] = pane
+		// An attached client sees its session's current Window, which shows every
+		// pane unless the Window is zoomed -- and a zoomed Window shows only the
+		// focused pane.
+		clients, _ := strconv.Atoi(fields[5])
+		if clients > 0 && fields[6] == "1" && (fields[7] != "1" || fields[8] == "1") {
+			srv.onScreen[paneID] = true
+			srv.onScreen[paneName] = true
+		}
 	}
 	return srv
 }
