@@ -18,9 +18,10 @@ type paneInfo struct {
 // Jump targets, the session:window.pane form an adapter may have recorded, and
 // the Tmux Session the pane belongs to.
 type tmuxPane struct {
-	id      string // %N
-	name    string // session:window.pane
-	session string // the pane's Tmux Session
+	id        string // %N
+	name      string // session:window.pane
+	session   string // the pane's Tmux Session (name)
+	sessionID string // the pane's Tmux Session id ($N), to resolve $TMUX_PANE
 }
 
 // tmuxSession is one Tmux Session on the server, as the Tmux Bar sees it.
@@ -58,15 +59,32 @@ type tmuxServer struct {
 // Returns nil when no server is reachable, which is what hides the Tmux Bar and
 // falls read tracking back to acting on a session through the TUI.
 func pollTmux() *tmuxServer {
-	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{session_id}\t#{session_name}\t#{session_windows}\t#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}\t"+
-			"#{session_attached}\t#{window_active}\t#{window_zoomed_flag}\t#{pane_active}").Output()
+	out, err := tmuxListPanes().Output()
 	if err != nil {
 		return nil
 	}
 	srv := parseTmuxPanes(string(out))
-	srv.current = tmuxCurrentSession()
+	srv.current = currentTmuxSession(srv)
 	return srv
+}
+
+// tmuxListPanes is the one tmux invocation the Bar and read tracking share.
+//
+// The socket is taken from $TMUX explicitly rather than left to tmux's own
+// default: inside tmux a bare `tmux` happens to follow $TMUX, but that is an
+// accident of the environment rather than a property we hold. Naming the
+// socket makes "the Bar shows the server this TUI runs in" an invariant, which
+// matters to a user with more than one server. Outside tmux there is no socket
+// to name, so the default path is used.
+func tmuxListPanes() *exec.Cmd {
+	if sock, _, _ := strings.Cut(os.Getenv("TMUX"), ","); sock != "" {
+		return exec.Command("tmux", "-S", sock, "list-panes", "-a", "-F",
+			"#{session_id}\t#{session_name}\t#{session_windows}\t#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}\t"+
+				"#{session_attached}\t#{window_active}\t#{window_zoomed_flag}\t#{pane_active}")
+	}
+	return exec.Command("tmux", "list-panes", "-a", "-F",
+		"#{session_id}\t#{session_name}\t#{session_windows}\t#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}\t"+
+			"#{session_attached}\t#{window_active}\t#{window_zoomed_flag}\t#{pane_active}")
 }
 
 // parseTmuxPanes builds the server snapshot from a `tmux list-panes -a` result.
@@ -85,7 +103,7 @@ func parseTmuxPanes(out string) *tmuxServer {
 			n, _ := strconv.Atoi(windows)
 			srv.sessions = append(srv.sessions, tmuxSession{id: id, name: name, windows: n})
 		}
-		pane := tmuxPane{id: paneID, name: paneName, session: name}
+		pane := tmuxPane{id: paneID, name: paneName, session: name, sessionID: id}
 		srv.byPane[paneID] = pane
 		srv.byPane[paneName] = pane
 		// An attached client sees its session's current Window, which shows every
@@ -102,13 +120,34 @@ func parseTmuxPanes(out string) *tmuxServer {
 
 // tmuxCurrentSession returns the id ($N) of the Tmux Session the attached
 // client is in. $TMUX holds the server's socket path, its pid and the client's
-// session id, comma-separated. Empty when the TUI runs outside tmux.
+// session id, comma-separated. Empty when the TUI runs outside tmux, or when
+// $TMUX is not the three-field form tmux writes.
 func tmuxCurrentSession() string {
 	parts := strings.Split(os.Getenv("TMUX"), ",")
 	if len(parts) != 3 || parts[2] == "" {
 		return ""
 	}
 	return "$" + parts[2]
+}
+
+// currentTmuxSession resolves the Tmux Session this process is running in, for
+// the Bar to mark as "you are here". It returns "" outside tmux, which is the
+// honest answer: there is no current session to mark, and the Bar renders every
+// session unmarked rather than guessing one.
+//
+// $TMUX's session id is authoritative and is used whenever it is usable. When
+// it is not -- $TMUX scrubbed or malformed, but $TMUX_PANE still exported --
+// the pane is resolved against the same poll through byPane, so one lost
+// variable cannot silently blank the marker.
+func currentTmuxSession(srv *tmuxServer) string {
+	if id := tmuxCurrentSession(); id != "" {
+		return id
+	}
+	pane := os.Getenv("TMUX_PANE")
+	if pane == "" || srv == nil {
+		return ""
+	}
+	return srv.byPane[pane].sessionID
 }
 
 // tmuxPanes returns pane root pid -> pane for every pane on the server.

@@ -107,6 +107,33 @@ func TestTmuxCurrentSession(t *testing.T) {
 	}
 }
 
+// TestCurrentTmuxSessionFallsBackToTheOwnPane covers a $TMUX that lost its
+// session field while $TMUX_PANE survived. One scrubbed variable must not
+// silently blank the "you are here" mark on the Bar.
+func TestCurrentTmuxSessionFallsBackToTheOwnPane(t *testing.T) {
+	srv := parseTmuxPanes(tmuxPanesFixture)
+	t.Setenv("TMUX_PANE", "%6")
+
+	t.Setenv("TMUX", "")
+	if got := currentTmuxSession(srv); got != "$4" {
+		t.Errorf("with no TMUX, the own pane should give its session, got %q", got)
+	}
+
+	// A usable $TMUX wins: it is the authoritative form.
+	t.Setenv("TMUX", "/tmp/tmux-1000/default,1290,2")
+	if got := currentTmuxSession(srv); got != "$2" {
+		t.Errorf("TMUX should win over the pane fallback, got %q", got)
+	}
+
+	// Outside tmux entirely there is no current session, and the Bar says so by
+	// marking nothing rather than guessing.
+	t.Setenv("TMUX", "")
+	t.Setenv("TMUX_PANE", "")
+	if got := currentTmuxSession(srv); got != "" {
+		t.Errorf("outside tmux there is no current session, got %q", got)
+	}
+}
+
 // TestPollTmuxLive checks the format strings against a real server. It is the
 // only test that can catch a mistyped tmux variable, which would silently make
 // every chip disappear.
