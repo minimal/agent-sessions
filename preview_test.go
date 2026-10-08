@@ -713,6 +713,7 @@ func TestTmuxGlyph(t *testing.T) {
 		{ID: "a", Title: "attached", LastMsg: "hi", Modified: now, PID: 100, Pane: "%27"},
 		{ID: "b", Title: "loose", LastMsg: "hi", Modified: now, PID: 200}, // live, no pane
 		{ID: "c", Title: "dead", LastMsg: "hi", Modified: now},            // not live
+		{ID: "d", Title: "cwd match", LastMsg: "hi", Modified: now, Pane: "%28"}, // pane, no pid
 	}
 	m := testModel(previewColumn, sessions) // column mode: one line per session
 	m.tmuxGlyph = "⊟"
@@ -720,7 +721,8 @@ func TestTmuxGlyph(t *testing.T) {
 	if !strings.Contains(out, "⊟") {
 		t.Errorf("attachable session should show the glyph, got:\n%s", out)
 	}
-	// A live-but-loose session and a dead one must not be marked.
+	// A live-but-loose session, a dead one, and one whose only pane came from
+	// the cwd match must not be marked: the glyph means Enter will jump there.
 	if strings.Count(out, "⊟") != 1 {
 		t.Errorf("exactly one session should be marked, got %d:\n%s", strings.Count(out, "⊟"), out)
 	}
@@ -935,24 +937,30 @@ func TestTmuxPaneForCWD(t *testing.T) {
 	}
 }
 
-// TestEnterPaneWithoutLive checks the guard decoupling: a pi session that is
-// NOT live (no PID -- pi has no registry) but IS in a tmux pane (found by cwd
-// match) can still run a {pane}-based enter command. Previously {pane} hard-
-// required Live(), which blocked every pi session.
-func TestEnterPaneWithoutLive(t *testing.T) {
-	m := glyphModel()
-	// Pane set, PID 0 -> not Live, but InTmux. A {pane} template must still
-	// run (substituting the pane) rather than be hard-blocked for lacking a PID.
-	m.sessions = []Session{{ID: "x", Title: "s", CWD: "/p", Pane: "%9", Modified: time.Now()}}
-	m.cursor = 0
-
-	after, cmd := m.runCommand("tmux select-pane -t {pane}")
-	mm := after.(model)
-	if mm.notice != "" {
-		t.Errorf("non-live but in-tmux session should run, got notice %q", mm.notice)
+// TestEnterPaneRequiresLive checks the {pane}/{pane?} contract: only a live
+// session is offered a pane. A pane an adapter matched from the session's cwd
+// (pid-less pi) must expand empty, so a template branching on {pane?} takes
+// its resume path instead of jumping to a pane that may be a shell or a
+// different session's.
+func TestEnterPaneRequiresLive(t *testing.T) {
+	dead := Session{ID: "x", Title: "s", CWD: "/p", Pane: "%9"} // pane from cwd match, pid 0
+	vars := commandVars(dead)
+	if vars["pane"] != "" || vars["pane?"] != "" {
+		t.Errorf("non-live session must not offer a pane, got pane=%q pane?=%q",
+			vars["pane"], vars["pane?"])
 	}
-	if cmd == nil {
-		t.Error("expected a command to be issued for an in-tmux non-live session")
+	if vars["pid?"] != "" {
+		t.Errorf("non-live session must not offer a pid, got %q", vars["pid?"])
+	}
+
+	live := Session{ID: "y", Title: "s", CWD: "/p", Pane: "%9", PID: 1, State: StateIdle}
+	vars = commandVars(live)
+	if vars["pane"] != "%9" || vars["pane?"] != "%9" {
+		t.Errorf("live session in a pane must offer it, got pane=%q pane?=%q",
+			vars["pane"], vars["pane?"])
+	}
+	if vars["pid?"] != "1" {
+		t.Errorf("live session must offer its pid, got %q", vars["pid?"])
 	}
 }
 

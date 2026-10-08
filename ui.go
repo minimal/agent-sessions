@@ -1069,23 +1069,19 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// runCommand runs a command template for the selected session, handing it
-// the terminal so interactive commands (tmux attach, editors) work.
-// Templates using {pane} or {pid} need a live session ({pane} additionally
-// a tmux pane hosting it) and show a notice otherwise; the optional forms
-// {pane?} and {pid?} expand to "" instead, so one command can branch.
-func (m model) runCommand(tmpl string) (tea.Model, tea.Cmd) {
-	if m.cursor >= len(m.sessions) {
-		return m, nil
-	}
-	s := m.sessions[m.cursor]
-	tmpl = sourceEnterTemplate(s.Source, tmpl, m.enterBySource)
+// commandVars builds the placeholder values for one session's command
+// template. {pane} means "the tmux pane hosting this session's running
+// process": it is offered only for a live session, because a pane an adapter
+// guessed from the session's cwd (pi without a live marker) may be a shell or
+// a different session's pane -- a template branching on {pane?} must fall
+// through to its resume path rather than jump to a dead end.
+func commandVars(s Session) map[string]string {
 	vars := map[string]string{
 		"id":     s.ID,
 		"pid":    strconv.Itoa(s.PID),
 		"pid?":   "",
-		"pane":   s.Pane, // seeded by the adapter's Live() (cwd match for pi); "" if none
-		"pane?":  s.Pane,
+		"pane":   "",
+		"pane?":  "",
 		"cwd":    s.CWD,
 		"file":   s.File,
 		"state":  string(s.State),
@@ -1094,17 +1090,34 @@ func (m model) runCommand(tmpl string) (tea.Model, tea.Cmd) {
 	}
 	if s.Live() {
 		vars["pid?"] = strconv.Itoa(s.PID)
-		// For a live session whose adapter didn't already place it (e.g. Claude
-		// sets Pane in Live() too, but a fresh lookup handles a pane move since),
-		// walk the process tree to the hosting pane. Skipped for a background
-		// job: it has no pane of its own, and the walk would just resolve to
-		// whatever pane happened to launch it.
-		if vars["pane"] == "" && !s.Background {
+		// Prefer the pane the adapter already resolved; otherwise -- e.g. a
+		// fresh lookup handles a pane move since Live() ran -- walk the process
+		// tree to the pane hosting it. Skipped for a background job: it has no
+		// pane of its own, and the walk would just resolve to whatever pane
+		// happened to launch it.
+		if pane := s.Pane; pane != "" {
+			vars["pane"], vars["pane?"] = pane, pane
+		} else if !s.Background {
 			if pane, ok := tmuxPaneFor(s.PID); ok {
 				vars["pane"], vars["pane?"] = pane, pane
 			}
 		}
 	}
+	return vars
+}
+
+// runCommand runs a command template for the selected session, handing it
+// the terminal so interactive commands (tmux attach, editors) work.
+// A template using {pid} needs a live session and shows a notice otherwise;
+// {pane} expands to "" instead so a template can fall back. The optional
+// forms {pane?} and {pid?} expand to "" too, so one command can branch.
+func (m model) runCommand(tmpl string) (tea.Model, tea.Cmd) {
+	if m.cursor >= len(m.sessions) {
+		return m, nil
+	}
+	s := m.sessions[m.cursor]
+	tmpl = sourceEnterTemplate(s.Source, tmpl, m.enterBySource)
+	vars := commandVars(s)
 	// {pid} needs a real process -- a PID of 0 is meaningless to substitute -- so
 	// a template using it requires a live session. {pane} is left empty when
 	// there's none (rather than hard-blocked), so a template can fall back (pi:

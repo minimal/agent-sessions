@@ -264,8 +264,8 @@ click_action = "select"
 # Bubble Tea key names: single characters ("o", "D"), "enter", or combos
 # like "ctrl+x" and "f5" (quote names with + or . in them). {id}, {pid},
 # {cwd}, {file} and {pane} expand to shell-quoted values; {pane} is the
-# tmux pane hosting the session's claude process, and commands using it
-# are only run for sessions found in a pane. Two placeholders are
+# tmux pane hosting the session's process, and is only ever set for a live
+# session (empty otherwise, so a template can fall back to resuming). Two placeholders are
 # interactive and resolve before the command runs: {project-picker} opens
 # a selection screen over every known project and expands to the chosen
 # project's path, and {text-input} (or {text-input:Some label}) asks for
@@ -343,18 +343,19 @@ enabled = true
 glyph = "◆"
 color = "12" # blue
 # session_dir = ""   # override; empty = $PI_CODING_AGENT_SESSION_DIR or ~/.pi/agent/sessions
-# Jump to pi's pane (authoritative with the agent-sessions-pi-live extension,
-# else cwd-match), or resume the session in the current terminal if it has no
-# visible tmux pane.
+# Jump to pi's pane (set only by the agent-sessions-pi-live extension, since
+# pi has no process registry), or resume the session in the current terminal
+# when it has no pane -- i.e. whenever it isn't running.
 enter = "tmux select-pane -t {pane} && tmux select-window -t {pane} && tmux switch-client -t {pane} 2>/dev/null || (cd {cwd} && pi --session {id})"
 [sources.copilot]
 enabled = true
 glyph = "" # nf-oct-copilot
 color = "10" # pastel green
 # session_dir = ""   # override; empty = $COPILOT_HOME/session-state or ~/.copilot/session-state
-# Jump to the Copilot session's pane (authoritative with the copilot-live hook,
-# see extensions/copilot-live, else cwd-match), or resume it in the current
-# terminal if it has no visible tmux pane.
+# Jump to the Copilot session's pane (set by the copilot-live hook, or matched
+# from the session cwd when a running session's hook couldn't name its pane;
+# see extensions/copilot-live), or resume it in the current terminal if it
+# isn't running.
 enter = "tmux select-pane -t {pane} && tmux select-window -t {pane} && tmux switch-client -t {pane} 2>/dev/null || (cd {cwd} && copilot --resume={id})"
 
 # --- Catppuccin Mocha example -------------------------------------------------

@@ -433,6 +433,9 @@ func (a *copilotAdapter) Live(sessions []Session) {
 			sessions[i].PID = pid
 			sessions[i].State = StateUnknown
 		}
+		// Best-effort pane hint: {pane} and the tmux glyph only use it when the
+		// session is live (see commandVars/InTmux), so it matters for a running
+		// copilot whose hook couldn't name its pane -- not for an offline one.
 		if pane, ok := tmuxPaneForCWD(sessions[i].CWD, panes); ok {
 			sessions[i].Pane = pane
 		}

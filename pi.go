@@ -279,6 +279,13 @@ func (a *piAdapter) Live(sessions []Session) {
 			sessions[i].Pane = marker.Pane
 			sessions[i].State = parsePiMarkerStatus(marker.Status)
 		} else if pane, ok := tmuxPaneForCWD(sessions[i].CWD, panes); ok {
+			// TODO(open question): this heuristic cannot tell whether the pane
+			// hosts this session -- it matches any pane sitting in the session's
+			// cwd, which may be a shell, or a different session's pane. A session
+			// with no live marker is not live, so {pane} and the tmux glyph now
+			// ignore this; the only remaining effect here is the pane id showing up
+			// in search, at the cost of a tmux fork on every refresh. Decide whether
+			// to drop it, or to require the pane's foreground command to be pi.
 			sessions[i].Pane = pane
 		}
 	}

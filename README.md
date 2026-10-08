@@ -78,9 +78,11 @@ command (below) and lets `/pi` or `/claude` filter the list.
   `~/.pi/agent/live/<sid>.json` with `{pid, pane, cwd, status}` on lifecycle
   hooks; the TUI then shows pi sessions as live with running/waiting/idle
   state and jumps to their tmux pane on `Enter`. Without the extension, pi
-  sessions are shown as offline for status — but the freshest still sorts to
-  the top by activity, and a cwd-based pane match still lets `Enter` jump to a
-  pane whose current path equals the session cwd. The pi process is a normal
+  sessions are shown as offline for status — the freshest still sorts to the
+  top by activity, and `Enter` resumes them: a pane whose current path equals
+  the session cwd is still recorded (so it turns up in search) but is never
+  offered as a jump target, because it may be a shell, or another session's
+  pane. The pi process is a normal
   Linux process (here, a WSL pnpm install on nix node). Subject is the first
   prompt (or a `pi --name` session); git branch is read from the repo.
 
@@ -393,9 +395,11 @@ survive word-splitting.
 | `{project-picker}` | interactive: the project chosen from a selection screen |
 | `{text-input}` | interactive: a line of text typed into the status bar |
 
-`{pid}` and `{pane}` only apply to live sessions, and `{pane}` further
-requires the process to sit inside a tmux pane — commands using them show a
-status-bar notice instead of running when that doesn't hold. Likewise
+`{pid}` applies only to a live session — commands using it show a status-bar
+notice instead of running when no process is attached. `{pane}` also applies
+only to a live session, but expands empty rather than blocking, so a template
+can fall back to resuming; it is a pane an adapter *verified* hosts the
+process, never one merely matching the session's cwd. Likewise
 `{ci-build-url}` needs the session's project to have a known CircleCI slug;
 it deep-links to the latest fetched workflow, falling back to the branch's
 pipelines page (e.g. `b = "xdg-open {ci-build-url}"`). Appending `?`
@@ -501,10 +505,10 @@ shell — a prompt containing a literal `"` is the one thing it can't carry.
 A `[sources.<name>] enter` setting overrides the `[commands]` `enter` binding
 for that source's sessions — useful because resume syntax differs (`claude
 --resume` vs `pi --session`). pi has no live PID (no per-process registry), so
-its command uses `{pane}` (found by matching the session cwd to a tmux pane's
-current path) plus `{cwd}`/`{id}`, not `{pid}`. With a pane, `Enter` jumps to
-pi's tmux pane; without one (or outside tmux) it falls back to resuming pi in
-the current terminal:
+its command uses `{pane}`/`{cwd}`/`{id}` and never `{pid}`. `{pane}` comes
+from the live marker, so a running pi session jumps to its tmux pane on
+`Enter`; an offline one has no pane to offer and takes the template's resume
+path:
 
 ```toml
 [sources.pi]
@@ -538,9 +542,8 @@ Then restart pi, or run `/reload` inside it. The extension writes
 `~/.pi/agent/live/<sid>.json` on `session_start`, `agent_start`, `agent_end`,
 and deletes it on `session_shutdown`. The TUI reads these markers to show
 `running`/`waiting`/`idle` state, the process pid, and the tmux pane — and
-jumps to that pane on `Enter`. Without the extension, `Enter` still jumps to a
-pane found by cwd match (best-effort) and falls back to resuming pi in the
-current terminal.
+jumps to that pane on `Enter`. Without the extension every pi session looks
+offline, so `Enter` resumes it in the current terminal instead of jumping.
 
 
 ## Tip: a tmux key that jumps to agent-sessions
