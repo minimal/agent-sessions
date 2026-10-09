@@ -32,7 +32,7 @@ type Config struct {
 		Dimmed  StyleConfig `toml:"dimmed"`
 		Bar     StyleConfig `toml:"bar"`
 		// ChipCurrent marks the Tmux Bar chip for the session the TUI runs in,
-		// on top of the pill every chip already draws.
+		// on top of the plain style every chip already draws.
 		ChipCurrent StyleConfig `toml:"chip_current"`
 		Selected    StyleConfig `toml:"selected"`
 		Preview     StyleConfig `toml:"preview"`

@@ -53,10 +53,16 @@ faint = true
 reverse = true
 
 [styles.chip_current]  # the Tmux Bar chip for the session this TUI runs in
-# Every Tmux Bar chip is a pill in [styles.bar]; this layers on top of that one
-# chip, so "you are here" reads without relying on colour. Add an fg here for a
-# stronger mark: over the pill's reverse video a foreground colour shows as the
-# tab's background, which is how tmux itself marks the active tab.
+# The chips are plain text on the bar's own background, separated by a "│"
+# rule; this section is what says which one is where you already are. Its
+# colours are literal: `bg` is the chip's background and `fg` its text, with no
+# reverse video underneath to swap them into the other channel. Colours rather
+# than `reverse = true` is deliberate -- a reverse run over the terminal's own
+# default colours is dropped by the renderer while the rest of the screen is
+# static, and "you are here" has to survive. Any fg/bg pair works; this is one
+# that reads on a light or a dark theme.
+bg = "6"
+fg = "0"
 bold = true
 
 [styles.selected]  # the cursor row

@@ -483,15 +483,29 @@ func TestTmuxBarRendersAboveTheStatusBar(t *testing.T) {
 	if !strings.Contains(bar, "agent-sessions") {
 		t.Errorf("the row above the status bar should be the Tmux Bar, got %q", bar)
 	}
-	if !strings.Contains(bar, "▸") {
-		t.Errorf("the current session's chip should carry the marker, got %q", bar)
+	// "You are here" is the current chip's own drawing, so the row has to carry
+	// that chip exactly as the renderer marks it.
+	chips := m.tmuxChips()
+	nameCap := m.tmuxBarNameCap(chips)
+	marked := false
+	for _, c := range chips {
+		if !c.Current {
+			continue
+		}
+		marked = true
+		if mark := m.renderTmuxChip(c, nameCap); !strings.Contains(bar, mark) {
+			t.Errorf("the current session's chip should be drawn marked, got %q for %q", bar, mark)
+		}
+	}
+	if !marked {
+		t.Fatalf("no chip is current for session $4, got %+v", chips)
 	}
 	m.tmuxBar = false
 	lines = strings.Split(m.View(), "\n")
 	if len(lines) != m.height {
 		t.Fatalf("the view should still fill its height, got %d lines", len(lines))
 	}
-	if strings.Contains(lines[m.height-2], "▸") {
+	if strings.Contains(lines[m.height-2], chipSep) {
 		t.Errorf("with the bar off the Index should own the row, got %q", lines[m.height-2])
 	}
 }
@@ -553,43 +567,58 @@ func TestTmuxChipAttentionDecoration(t *testing.T) {
 	defer lipgloss.SetColorProfile(prev)
 
 	m := barModel(t, parseTmuxPanes(tmuxPanesFixture))
-	// A plain bar: waiting is reverse video.
-	m.styles.bar = lipgloss.NewStyle()
-	waiting := m.tmuxGlyphCell(tmuxChipAgent{Source: "pi", Waiting: true}, m.styles.bar)
+	// A plain chip, as every chip but the current one is drawn: waiting has to
+	// bring its own reverse video to be seen at all.
+	strip := m.chipStripStyle()
+	waiting := m.tmuxGlyphCell(tmuxChipAgent{Source: "pi", Waiting: true}, strip)
 	if !boldAndReverse(waiting) {
 		t.Errorf("waiting should render reverse video, got %q", waiting)
 	}
 	if !strings.Contains(waiting, m.agentGlyphs["pi"]) {
 		t.Errorf("the waiting mark should stay the Agent Source, got %q", waiting)
 	}
-	// The default bar is a reverse row: the mark inverts that row's own video.
-	bar := barModel(t, parseTmuxPanes(tmuxPanesFixture))
-	waiting = bar.tmuxGlyphCell(tmuxChipAgent{Source: "pi", Waiting: true}, bar.styles.bar)
+	// Waiting inverts the cell it is drawn in, never repeating it: a reversed
+	// mark inside a reversed chip would be a second block inside the first. A
+	// config can still ask for a reversed chip, so that base is pinned too.
+	block := m.chipStyle(tmuxChip{Current: true}).Reverse(true)
+	waiting = m.tmuxGlyphCell(tmuxChipAgent{Source: "pi", Waiting: true}, block)
 	if boldAndReverse(waiting) {
-		t.Errorf("on a reverse bar, waiting should invert the row rather than repeat its video, got %q", waiting)
+		t.Errorf("on a reversed chip, waiting should invert the chip rather than repeat its video, got %q", waiting)
 	}
 	if !strings.Contains(waiting, m.agentGlyphs["pi"]) {
 		t.Errorf("the waiting mark should stay the Agent Source, got %q", waiting)
 	}
-	// Unread carries the attention colour, on the channel the row's reverse swaps.
-	unread := bar.tmuxGlyphCell(tmuxChipAgent{Source: "claude", Unread: true}, bar.styles.bar)
-	if !strings.Contains(unread, "48;5;208") {
-		t.Errorf("unread should use the attention colour, got %q", unread)
+	// The shipped current chip is a coloured block rather than a reversed one,
+	// so its waiting mark is a notch: the block's own colours, inverted.
+	waiting = m.tmuxGlyphCell(tmuxChipAgent{Source: "pi", Waiting: true}, m.chipStyle(tmuxChip{Current: true}))
+	if !boldAndReverse(waiting) || !strings.Contains(waiting, "46") {
+		t.Errorf("waiting on the coloured chip should invert that chip's own colours, got %q", waiting)
 	}
-	if !strings.Contains(unread, bar.agentGlyphs["claude"]) {
+	// Unread carries the attention colour on the channel its cell leaves free: a
+	// reversed cell swaps the two, so the colour has to go on the background
+	// there and on the text everywhere else.
+	unread := m.tmuxGlyphCell(tmuxChipAgent{Source: "claude", Unread: true}, block)
+	if !strings.Contains(unread, "48;5;208") {
+		t.Errorf("unread on a reversed chip should colour its background, got %q", unread)
+	}
+	unread = m.tmuxGlyphCell(tmuxChipAgent{Source: "claude", Unread: true}, m.chipStyle(tmuxChip{Current: true}))
+	if !strings.Contains(unread, "38;5;208") {
+		t.Errorf("unread on a plain chip should colour its text, got %q", unread)
+	}
+	if !strings.Contains(unread, m.agentGlyphs["claude"]) {
 		t.Errorf("the unread mark should stay the Agent Source, got %q", unread)
 	}
-	// running and idle are plain: the Bar's own style, unchanged.
+	// running and idle are plain: the chip's own style, unchanged.
 	for _, a := range []tmuxChipAgent{{Source: "claude"}, {Source: "pi"}} {
-		want := bar.styles.bar.Render(pad(bar.agentGlyphs[a.Source], bar.colAgentGlyph))
-		if got := bar.tmuxGlyphCell(a, bar.styles.bar); got != want {
+		want := strip.Render(pad(m.agentGlyphs[a.Source], m.colAgentGlyph))
+		if got := m.tmuxGlyphCell(a, strip); got != want {
 			t.Errorf("the %s mark should be plain: got %q, want %q", a.Source, got, want)
 		}
 	}
 	// A source with no configured mark leaves its slot, as in the Index.
 	m.agentGlyphs = map[string]string{"pi": "◆", "claude": "", "copilot": ""}
 	m.colAgentGlyph = agentGlyphWidth(m.agentGlyphs)
-	if got := m.tmuxGlyphCell(tmuxChipAgent{Source: "claude"}, m.styles.bar); strings.TrimSpace(ansi.Strip(got)) != "" {
+	if got := m.tmuxGlyphCell(tmuxChipAgent{Source: "claude"}, strip); strings.TrimSpace(ansi.Strip(got)) != "" {
 		t.Errorf("a source with no mark should leave a blank slot, got %q", got)
 	}
 }
@@ -638,10 +667,11 @@ func TestTmuxBarOverflow(t *testing.T) {
 	}
 }
 
-// TestTmuxBarChipsArePillsOnAPlainField pins the Bar's tmux-tab look: every
-// chip is its own reverse-video pill, and the field between and after the chips
-// is not, so a row of chips reads as separate tabs rather than one band of text.
-func TestTmuxBarChipsArePillsOnAPlainField(t *testing.T) {
+// TestTmuxBarChipsAreTabsOnAStrip pins the Bar's tmux-tab look: the chips are
+// plain text on the row's own background, separated by a rule, so the row reads
+// as one bar of tabs. Only the current chip is a block, and that block is what
+// marks it.
+func TestTmuxBarChipsAreTabsOnAStrip(t *testing.T) {
 	prev := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	defer lipgloss.SetColorProfile(prev)
@@ -649,41 +679,86 @@ func TestTmuxBarChipsArePillsOnAPlainField(t *testing.T) {
 	m := barModel(t, parseTmuxPanes(tmuxPanesFixture),
 		liveAgent("a", "pi", "%6", StateIdle))
 	m.width = 200 // room to spare, so the slack after the last chip is obvious
+	m.tmuxSrv.current = "$4"
 	chips := m.tmuxChips()
 	nameCap := m.tmuxBarNameCap(chips)
 
-	// Every chip is a pill: drawn in the reverse [styles.bar], padded on both
-	// sides. The padding is what separates it from its neighbours.
+	// Every chip but the current one is plain: no reverse, no background of its
+	// own. A row of blocks is what the tabs replaced.
 	for _, c := range chips {
-		if !m.chipStyle(c).GetReverse() {
-			t.Errorf("chip %q should be drawn in the pill style", c.Name)
+		if c.Current {
+			continue
+		}
+		if st := m.chipStyle(c); st.GetReverse() || !isNoColor(st.GetBackground()) {
+			t.Errorf("chip %q should be plain text on the strip, got %+v", c.Name, st)
 		}
 		plain := ansi.Strip(m.renderTmuxChip(c, nameCap))
 		if !strings.HasPrefix(plain, chipPad) || !strings.HasSuffix(plain, chipPad) {
-			t.Errorf("chip %q should be padded into a pill, got %q", c.Name, plain)
+			t.Errorf("chip %q should be padded, got %q", c.Name, plain)
 		}
 	}
-	// The field the pills sit on is plain. A reverse run here would merge the
-	// chips back into one continuous band, which is what the pills exist to
-	// stop -- so this is pinned at the escape level.
-	if field := m.chipField(chipGap); strings.Contains(field, "\x1b[") {
-		t.Errorf("the field between chips should be plain, got %q", field)
-	}
-	// The row's trailing slack is that same plain field.
+	// The chips are separated by a rule drawn in the strip's own style, so a tab
+	// boundary never depends on colour, and the strip itself keeps its reverse
+	// lifted: a reversed strip would be the band of video the tabs replaced.
 	row := m.tmuxBarView()
-	if !strings.HasSuffix(row, "  ") {
-		t.Errorf("the slack should be plain padding, got %q", row)
+	if got, want := strings.Count(row, chipSep), len(chips)-1; got != want {
+		t.Errorf("the row should draw %d separators, got %d: %q", want, got, ansi.Strip(row))
+	}
+	if strip := m.chipStripStyle(); strip.GetReverse() {
+		t.Error("the strip should be drawn with the Bar's reverse lifted")
+	}
+	if got := m.chipStrip(chipSep); !strings.Contains(row, got) {
+		t.Errorf("the separator should be drawn in the strip's style, got %q", row)
+	}
+	// The row's trailing slack is that same strip, so the bar runs to the row's
+	// end instead of stopping at the last chip.
+	if plain := ansi.Strip(row); lipgloss.Width(plain) != m.width || !strings.HasSuffix(plain, "  ") {
+		t.Errorf("the row should end on the strip's slack, got %q", plain)
 	}
 }
 
-// TestTmuxBarCurrentChipIsDistinct pins the "you are here" mark. Every chip is
-// now a pill, so the current one is marked with [styles.chip_current] and its
-// "▸" marker rather than by looking different at a glance.
+// TestTmuxBarChipWidthsIgnoreWhatIsCurrent pins the shape of the strip: which
+// chip is current changes that chip's colours and nothing else. A mark that
+// added a cell would make the row jump every time the user moved between
+// sessions, and shift every chip after the current one.
+func TestTmuxBarChipWidthsIgnoreWhatIsCurrent(t *testing.T) {
+	srv := parseTmuxPanes(tmuxPanesFixture)
+	m := barModel(t, srv)
+	m.width = 120
+
+	// Lay the row out with each session in turn marked current, and with none.
+	var want []int
+	for _, id := range []string{"", "$0", "$4", "$5", "$6", "$7"} {
+		srv.current = id
+		chips := m.tmuxChips()
+		nameCap := m.tmuxBarNameCap(chips)
+		starts := make([]int, 0, len(chips))
+		at := 0
+		for _, c := range chips {
+			starts = append(starts, at)
+			at += lipgloss.Width(m.renderTmuxChip(c, nameCap)) + lipgloss.Width(chipSep)
+		}
+		if want == nil {
+			want = starts
+			continue
+		}
+		if !slices.Equal(starts, want) {
+			t.Errorf("with session %q current the chips start at %v, want %v", id, starts, want)
+		}
+		if got := lipgloss.Width(m.tmuxBarView()); got != m.width {
+			t.Errorf("with session %q current the row is %d wide, want %d", id, got, m.width)
+		}
+	}
+}
+
+// TestTmuxBarCurrentChipIsDistinct pins the "you are here" mark: the current
+// chip is the row's only block, drawn in [styles.chip_current] on top of the
+// strip.
 //
 // Note what this style must not use: underline. lipgloss routes whitespace
 // through a separate space styler when a style is underlined, and that styler
-// does not inherit the pill's reverse -- a chip padded with underlined spaces
-// loses the padding's background, so the pill opens a notch. Bold, a colour,
+// does not inherit the block's video -- a chip padded with underlined spaces
+// loses the padding's background, so the block opens a notch. Bold, a colour,
 // and reverse all survive whitespace.
 func TestTmuxBarCurrentChipIsDistinct(t *testing.T) {
 	prev := lipgloss.ColorProfile()
@@ -706,36 +781,63 @@ func TestTmuxBarCurrentChipIsDistinct(t *testing.T) {
 		t.Fatalf("no chip is marked current for session $4, got %+v", chips)
 	}
 	st := m.chipStyle(*current)
+	if isNoColor(st.GetBackground()) {
+		t.Error("the current chip should carry a background by default, so 'you are here' reads on a row of plain tabs")
+	}
 	if !st.GetBold() {
-		t.Error("the current chip should be bold by default, so it reads on a row of pills")
+		t.Error("the current chip should be bold by default: where the colours are not there, bold is the whole mark")
 	}
 	if st.GetUnderline() {
-		t.Error("the current chip must not be underlined: lipgloss would drop the pill's reverse from its padding")
+		t.Error("the current chip must not be underlined: lipgloss would drop the block's background from its padding")
 	}
-	if !st.GetReverse() {
-		t.Error("the current chip should keep the pill every other chip draws")
+	// The mark is not reverse video. A reverse run over the terminal's own
+	// default colours is dropped by the renderer while the rest of the screen
+	// stays static, which is exactly when the mark has to hold: the block has to
+	// name real colours instead.
+	if st.GetReverse() {
+		t.Error("the current chip should be marked with its own colours rather than reverse video")
 	}
 	// Only the current chip is marked, so the mark still means something.
 	for _, c := range chips {
 		if c.Current {
 			continue
 		}
-		if other := m.chipStyle(c); other.GetBold() {
-			t.Errorf("chip %q should not carry the current style, got bold=%v", c.Name, other.GetBold())
+		if other := m.chipStyle(c); other.GetBold() || other.GetReverse() || !isNoColor(other.GetBackground()) {
+			t.Errorf("chip %q should not carry the current style, got bold=%v reverse=%v bg=%v",
+				c.Name, other.GetBold(), other.GetReverse(), other.GetBackground())
 		}
 	}
-	// The marker survives, so the chip is identifiable without colour.
-	if chip := ansi.Strip(m.renderTmuxChip(*current, 20)); !strings.Contains(chip, "▸ "+current.Name) {
-		t.Errorf("the current chip should keep its marker, got %q", chip)
+	// The chip is identifiable without colour: the block itself is the marker.
+	chip := m.renderTmuxChip(*current, 20)
+	if plain := ansi.Strip(chip); !strings.HasPrefix(plain, chipPad+current.Name) {
+		t.Errorf("the current chip should carry only its own name, got %q", plain)
 	}
-	// The padding carries the pill's reverse too. lipgloss renders a
+	// The padding carries the block's background too. lipgloss renders a
 	// whitespace-only string through a separate space styler for some attribute
 	// sets, dropping the other attributes there, so a styled pad is not a given:
-	// if it lost the reverse, the current chip's pill would open a notch at both
-	// ends. Pinned on the bytes the app emits.
-	raw := m.renderTmuxChip(*current, 20)
-	if leading := raw[:strings.Index(raw, " ")]; !strings.Contains(leading, "7") {
-		t.Errorf("the current chip's leading pad should be reverse, got %q", raw)
+	// if it lost the background, the current chip's block would open a notch at
+	// both ends. Pinned on the bytes the app emits -- SGR 46 is the background
+	// cyan the shipped default names.
+	if leading := chip[:strings.Index(chip, " ")]; !strings.Contains(leading, "46") {
+		t.Errorf("the current chip's leading pad should carry its background, got %q", chip)
+	}
+	// A colour named for the current chip is literal: `bg` colours the block and
+	// `fg` its text, with no reverse underneath to swap them into the other
+	// channel.
+	coloured := barModelWith(t, func(c *Config) {
+		c.Styles.ChipCurrent = StyleConfig{Bg: "2", Fg: "7"}
+	}, parseTmuxPanes(tmuxPanesFixture))
+	coloured.tmuxSrv.current = "$4"
+	coloured.width = 100
+	st = coloured.chipStyle(tmuxChip{ID: "$4", Name: "agent-sessions", Current: true})
+	if st.GetReverse() {
+		t.Error("a chip given a colour should not also be reversed: that swaps the colour into the other channel")
+	}
+	if got := st.GetBackground(); got != lipgloss.Color("2") {
+		t.Errorf("the current chip should take the configured background, got %v", got)
+	}
+	if got := st.GetForeground(); got != lipgloss.Color("7") {
+		t.Errorf("the current chip should take the configured foreground, got %v", got)
 	}
 }
 
@@ -1056,9 +1158,9 @@ func TestTmuxChipAtHitsOnlyChips(t *testing.T) {
 		}
 		w := lipgloss.Width(m.renderTmuxChip(c, nameCap))
 		if got, ok := m.tmuxChipAt(x + w); ok {
-			t.Errorf("column %d is the gap after %q, but it hit %q", x+w, c.Name, got.Name)
+			t.Errorf("column %d is the separator after %q, but it hit %q", x+w, c.Name, got.Name)
 		}
-		x += w + lipgloss.Width(chipGap)
+		x += w + lipgloss.Width(chipSep)
 	}
 	if _, ok := m.tmuxChipAt(m.width); ok {
 		t.Error("a column past the row should hit nothing")
@@ -1079,7 +1181,7 @@ func TestTmuxChipClickJumps(t *testing.T) {
 	}
 	// The agent-sessions chip is the second one; the first is _home.
 	chips := m.tmuxChips()
-	x := lipgloss.Width(m.renderTmuxChip(chips[0], m.tmuxBarNameCap(chips))) + lipgloss.Width(chipGap)
+	x := lipgloss.Width(m.renderTmuxChip(chips[0], m.tmuxBarNameCap(chips))) + lipgloss.Width(chipSep)
 	mm, cmd := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: x, Y: barY})
 	got := mm.(model)
 	if cmd == nil {

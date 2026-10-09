@@ -360,13 +360,13 @@ session you opened.
 The `[tmux]` section sets the marker shown on tmux-attachable sessions, and
 the Tmux Bar: one row above the status bar holding a chip per tmux session on
 the server, so a workspace stays reachable even when the Index filters hide
-it. Each chip is a pill in `[styles.bar]`, and the chip for the session the
-TUI itself runs in carries a `▸` marker plus `[styles.chip_current]` — add an
-`fg` there for a louder mark, since over the pill's reverse video a foreground
-colour shows as the tab's background. Clicking a chip, or picking a session
-from the `t` picker, jumps there: tmux's last-active window, or the pane of an
-agent that is waiting or unread. The jump is the `[commands] tmux` template,
-so it stays configurable.
+it. The chips are tabs: plain text in `[styles.bar]`'s colours, separated by a
+`│` rule, with the session the TUI itself runs in drawn as a block in
+`[styles.chip_current]`. That section's `fg` and `bg` are literal — they are
+what the chip is, with no reverse video underneath to swap them into the other
+channel. Clicking a chip, or picking a session from the `t` picker, jumps
+there: tmux's last-active window, or the pane of an agent that is waiting or
+unread. The jump is the `[commands] tmux` template, so it stays configurable.
 
 ```toml
 [tmux]

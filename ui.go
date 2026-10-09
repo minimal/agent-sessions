@@ -1759,12 +1759,12 @@ type tmuxChip struct {
 	Agents  []tmuxChipAgent
 }
 
-// chipGap separates one chip from the next, chipPad is the padding that turns a
-// chip into a pill, and chipNameFloor is the narrowest a chip name shrinks to
-// before the row's tail is cut instead: a shorter name says nothing about which
-// session it is.
+// chipSep separates one chip from the next, chipPad is the padding around a
+// chip's name, and chipNameFloor is the narrowest a chip name shrinks to before
+// the row's tail is cut instead: a shorter name says nothing about which session
+// it is.
 const (
-	chipGap       = " "
+	chipSep       = "│"
 	chipPad       = " "
 	chipNameFloor = 4
 )
@@ -1824,7 +1824,7 @@ func (m model) tmuxChips() []tmuxChip {
 
 // tmuxBarView renders the Tmux Bar: one chip per Tmux Session in tmux's own
 // order, across the full width. Every piece is styled on its own -- a single
-// wrapper around the row would let one cell's reset drop the Bar's reverse for
+// wrapper around the row would let one cell's reset drop the strip's style for
 // the rest of it.
 func (m model) tmuxBarView() string {
 	chips := m.tmuxChips()
@@ -1833,57 +1833,63 @@ func (m model) tmuxBarView() string {
 	}
 	row := m.renderTmuxBar(chips, m.tmuxBarNameCap(chips))
 	row = trunc(row, m.width)
-	// The slack is the plain field the pills sit on, like the gaps between them:
-	// a styled run would extend the Bar's reverse across the row's tail.
+	// The slack is the same plain strip the chips sit on, so the row reads as one
+	// bar to the end rather than a band of styled chips over a bare tail.
 	if gap := m.width - lipgloss.Width(row); gap > 0 {
-		row += m.chipField(strings.Repeat(" ", gap))
+		row += m.chipStrip(strings.Repeat(" ", gap))
 	}
 	return row
 }
 
-// chipField renders the plain field the pills sit on: the Bar style with its
-// reverse lifted. Every chip is a pill in [styles.bar], so the field between
-// and after them has to stay un-reversed or the row merges back into one
-// continuous band and the chips lose their boundaries.
-func (m model) chipField(text string) string {
-	return m.styles.bar.Reverse(false).Render(text)
+// chipStrip renders the row's own cells: the separators between chips and the
+// slack after the last one. It is [styles.bar] with its reverse lifted, which
+// leaves the strip on the terminal's own background: the chips are then plain
+// text separated by a rule, as a status bar's tabs are, instead of a row of
+// blocks each carrying its own video.
+func (m model) chipStrip(text string) string {
+	return m.chipStripStyle().Render(text)
 }
 
-// chipStyle is one chip's pill style: [styles.bar], with [styles.chip_current]
-// layered on for the session the TUI itself runs in.
+// chipStripStyle is the style chipStrip draws in, and the base every chip's own
+// style is built on top of.
+func (m model) chipStripStyle() lipgloss.Style {
+	return m.styles.bar.Reverse(false)
+}
+
+// chipStyle is one chip's style: the strip's own, with [styles.chip_current]
+// layered on for the session the TUI itself runs in. Since the strip keeps its
+// reverse lifted, a colour set in [styles.chip_current] is literal -- `bg` is
+// the chip's background and `fg` its text, with nothing swapped underneath.
 func (m model) chipStyle(c tmuxChip) lipgloss.Style {
-	base := m.styles.bar
+	base := m.chipStripStyle()
 	if c.Current {
 		base = overlay(base, m.styles.chipCurrent)
 	}
 	return base
 }
 
-// renderTmuxBar renders every chip at one name width, joined by a plain gap so
-// each pill keeps its own boundary.
+// renderTmuxBar renders every chip at one name width, separated by the strip's
+// rule so the tab boundaries never depend on colour.
 func (m model) renderTmuxBar(chips []tmuxChip, nameCap int) string {
 	parts := make([]string, len(chips))
 	for i, c := range chips {
 		parts[i] = m.renderTmuxChip(c, nameCap)
 	}
-	return strings.Join(parts, m.chipField(chipGap))
+	return strings.Join(parts, m.chipStrip(chipSep))
 }
 
-// renderTmuxChip renders one chip as a pill: [styles.bar] padding around the
-// session name, its Window count when greater than one, then one mark per live
-// agent, capped at [tmux] max_icons with a "+N" overflow. The current
-// session's chip carries [styles.chip_current] on top, plus a "▸" marker.
+// renderTmuxChip renders one chip: padding around the session name, its Window
+// count when greater than one, then one mark per live agent, capped at [tmux]
+// max_icons with a "+N" overflow. Nothing here is conditional on the chip being
+// current, so marking a chip never moves the ones after it: the mark is
+// [styles.chip_current], and every chip carries the same cells either way.
 func (m model) renderTmuxChip(c tmuxChip, nameCap int) string {
 	base := m.chipStyle(c)
 	cell := func(st lipgloss.Style, text string) string {
 		return overlay(base, st).Render(text)
 	}
-	marker := ""
-	if c.Current {
-		marker = "▸ "
-	}
 	var b strings.Builder
-	b.WriteString(cell(lipgloss.NewStyle(), marker+trunc(c.Name, nameCap)))
+	b.WriteString(cell(lipgloss.NewStyle(), trunc(c.Name, nameCap)))
 	if c.Windows > 1 {
 		b.WriteString(cell(lipgloss.NewStyle(), fmt.Sprintf("(%d)", c.Windows)))
 	}
@@ -1900,14 +1906,14 @@ func (m model) renderTmuxChip(c tmuxChip, nameCap int) string {
 			b.WriteString(cell(lipgloss.NewStyle(), fmt.Sprintf(" +%d", n)))
 		}
 	}
-	// The padding is what makes a pill: without it the chip's reverse runs
-	// straight into the plain field and the boundary disappears.
+	// The padding keeps the tab off its own rule, and it is drawn in the chip's
+	// style so the current chip's background covers its whole cell.
 	return base.Render(chipPad) + b.String() + base.Render(chipPad)
 }
 
 // tmuxGlyphCell renders one agent's mark: the Agent Source, decorated by
-// Attention and never replaced by it. waiting inverts the Bar's own video, so
-// it reads as reverse video against a reverse row instead of vanishing into it;
+// Attention and never replaced by it. waiting inverts the style it is drawn in,
+// so it reads as reverse video against that cell instead of vanishing into it;
 // Unread carries the attention colour; running and idle stay plain.
 func (m model) tmuxGlyphCell(a tmuxChipAgent, base lipgloss.Style) string {
 	mark := pad(m.agentGlyphs[a.Source], m.colAgentGlyph)
@@ -1947,7 +1953,8 @@ func (m model) tmuxBarNameCap(chips []tmuxChip) int {
 }
 
 // tmuxChipAt returns the chip under column x on the Tmux Bar's row, laid out
-// exactly as the row was drawn. false when x falls in a gap, or past the cut.
+// exactly as the row was drawn. false when x falls on a separator, or past the
+// row's cut.
 func (m model) tmuxChipAt(x int) (tmuxChip, bool) {
 	if x >= m.width {
 		return tmuxChip{}, false // past the row's cut
@@ -1960,7 +1967,7 @@ func (m model) tmuxChipAt(x int) (tmuxChip, bool) {
 		if x >= start && x < start+w {
 			return c, true
 		}
-		start += w + lipgloss.Width(chipGap)
+		start += w + lipgloss.Width(chipSep)
 	}
 	return tmuxChip{}, false
 }
