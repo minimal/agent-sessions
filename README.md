@@ -358,9 +358,9 @@ regains focus, so the row you were reading isn't masked while you look at the
 session you opened.
 
 The `[tmux]` section sets the marker shown on tmux-attachable sessions, and
-the Tmux Bar: one row above the status bar holding a chip per tmux session on
-the server, so a workspace stays reachable even when the Index filters hide
-it. The chips are tabs: plain text in `[styles.bar]`'s colours, separated by a
+the Tmux Bar: one row at the bottom of the screen, below the status bar,
+holding a chip per tmux session on the server, so a workspace stays reachable
+even when the Index filters hide it. The chips are tabs: plain text in `[styles.bar]`'s colours, separated by a
 `│` rule, with the session the TUI itself runs in drawn as a block in
 `[styles.chip_current]`. That section's `fg` and `bg` are literal — they are
 what the chip is, with no reverse video underneath to swap them into the other

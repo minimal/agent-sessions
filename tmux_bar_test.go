@@ -467,7 +467,7 @@ func TestTmuxBarShownTakesARow(t *testing.T) {
 	}
 }
 
-func TestTmuxBarRendersAboveTheStatusBar(t *testing.T) {
+func TestTmuxBarRendersBelowTheStatusBar(t *testing.T) {
 	srv := parseTmuxPanes(tmuxPanesFixture)
 	srv.current = "$4"
 	m := barModel(t, srv, liveAgent("a", "pi", "%6", StateIdle))
@@ -476,12 +476,12 @@ func TestTmuxBarRendersAboveTheStatusBar(t *testing.T) {
 	if len(lines) != m.height {
 		t.Fatalf("the view should fill its height, got %d lines:\n%s", len(lines), m.View())
 	}
-	bar, status := lines[m.height-2], lines[m.height-1]
+	status, bar := lines[m.height-2], lines[m.height-1]
 	if !strings.Contains(status, "Sessions:") {
-		t.Errorf("the status bar should stay the last row, got %q", status)
+		t.Errorf("the status bar should hold the row under the Index, got %q", status)
 	}
 	if !strings.Contains(bar, "agent-sessions") {
-		t.Errorf("the row above the status bar should be the Tmux Bar, got %q", bar)
+		t.Errorf("the Tmux Bar should own the bottom row, got %q", bar)
 	}
 	// "You are here" is the current chip's own drawing, so the row has to carry
 	// that chip exactly as the renderer marks it.
@@ -505,8 +505,8 @@ func TestTmuxBarRendersAboveTheStatusBar(t *testing.T) {
 	if len(lines) != m.height {
 		t.Fatalf("the view should still fill its height, got %d lines", len(lines))
 	}
-	if strings.Contains(lines[m.height-2], chipSep) {
-		t.Errorf("with the bar off the Index should own the row, got %q", lines[m.height-2])
+	if strings.Contains(m.View(), chipSep) {
+		t.Errorf("with the bar off no row should draw chips, got %q", m.View())
 	}
 }
 
@@ -911,20 +911,20 @@ func TestTmuxBarRowIsNotPartOfTheIndex(t *testing.T) {
 		t.Fatalf("a click on the second visible row should select it, got cursor %d", got.cursor)
 	}
 
-	// The bar's own row is below the last index row: it selects nothing, even
+	// The bar's own row is the screen's bottom one: it selects nothing, even
 	// though more sessions exist off the page.
 	m.cursor = 0
 	m.cursorHidden = true
-	if barY := m.pageSize() + 1; barY >= m.height-1 {
-		t.Fatalf("the fixture should put the bar above the status bar, got Y=%d for height %d", barY, m.height)
+	if barY := m.height - 1; barY <= m.pageSize() {
+		t.Fatalf("the fixture should put the bar below the page, got Y=%d for height %d", barY, m.height)
 	}
-	mm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: m.pageSize() + 1})
+	mm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: m.height - 1})
 	if got := mm.(model); got.cursor != 0 || !got.cursorHidden {
 		t.Errorf("a click on the Tmux Bar should do nothing, got cursor %d hidden %v", got.cursor, got.cursorHidden)
 	}
-	// So does the status bar.
+	// So does the status bar, which now sits above it.
 	m.cursorHidden = true
-	mm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: m.height - 1})
+	mm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: m.height - 2})
 	if got := mm.(model); got.cursor != 0 || !got.cursorHidden {
 		t.Errorf("a click on the status bar should do nothing, got cursor %d hidden %v", got.cursor, got.cursorHidden)
 	}
@@ -1175,9 +1175,15 @@ func TestTmuxChipClickJumps(t *testing.T) {
 	if m.switchOnClick {
 		t.Fatal("the fixture should not switch on a plain click")
 	}
-	barY := m.pageSize() + 1
-	if barY != m.height-2 {
-		t.Fatalf("the bar should sit above the status bar, got Y=%d for height %d", barY, m.height)
+	// The chips own the screen's bottom row: find it in the view, then click it.
+	barY := -1
+	for i, line := range strings.Split(m.View(), "\n") {
+		if strings.Contains(line, chipSep) {
+			barY = i
+		}
+	}
+	if barY != m.height-1 {
+		t.Fatalf("the chips should own the bottom row, got Y=%d for height %d", barY, m.height)
 	}
 	// The agent-sessions chip is the second one; the first is _home.
 	chips := m.tmuxChips()
@@ -1200,7 +1206,7 @@ func TestTmuxChipClickJumps(t *testing.T) {
 		x, y int
 	}{
 		{"the gap after a chip", x - 1, barY},
-		{"the status bar", x, m.height - 1},
+		{"the status bar", x, m.height - 2},
 		{"the top bar", x, 0}, // the help screen itself is inert too: handleMouse returns early
 	} {
 		m.unread = map[string]bool{"a": true}

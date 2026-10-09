@@ -1081,7 +1081,8 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 	// A click on a chip Jumps immediately and ignores [mouse] click_action: a
 	// chip has no selection state to set, so there is nothing to select first.
-	if m.tmuxBarShown() && msg.Y == m.pageSize()+1 {
+	// The chips own the bottom row, below the status bar.
+	if m.tmuxBarShown() && msg.Y == m.height-1 {
 		c, ok := m.tmuxChipAt(msg.X)
 		if !ok {
 			return m, nil
@@ -1577,9 +1578,9 @@ func (m model) lastRow() int {
 	return max(0, len(m.sessions)-1)
 }
 
-// pageSize is the number of index rows visible between the two bars. The Tmux
-// Bar, while shown, takes a row of its own: height-3, back to height-2 without
-// it, so non-tmux users lose no rows.
+// pageSize is the number of index rows visible between the top and status bars.
+// The Tmux Bar, while shown, takes a row of its own below the status bar:
+// height-3, back to height-2 without it, so non-tmux users lose no rows.
 func (m *model) pageSize() int {
 	bars := 2
 	if m.tmuxBarShown() {
@@ -1732,11 +1733,13 @@ func (m model) View() string {
 			) + suffix
 		}
 	}
-	if m.tmuxBarShown() {
-		b.WriteString(m.tmuxBarView())
-		b.WriteString("\n")
-	}
+	// The status bar holds the row under the Index and the Tmux Bar takes the
+	// screen's own bottom row, so the chips sit against tmux's status line.
 	b.WriteString(m.styles.bar.Render(pad(status, m.width)))
+	if m.tmuxBarShown() {
+		b.WriteString("\n")
+		b.WriteString(m.tmuxBarView())
+	}
 	return b.String()
 }
 
