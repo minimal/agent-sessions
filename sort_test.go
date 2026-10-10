@@ -274,6 +274,11 @@ func TestRepoColorStableAndScoped(t *testing.T) {
 	if m.repoColor("") != nil {
 		t.Errorf("repoColor(\"\") should be nil")
 	}
+	// Loaded repos get distinct colours while the palette lasts.
+	m.repoRank = colorRankRepos([]Session{{Repo: "b"}, {Repo: "a"}, {Repo: "c"}, {Repo: "a"}})
+	if m.repoColor("a") == m.repoColor("b") || m.repoColor("b") == m.repoColor("c") {
+		t.Errorf("loaded repos should not share a colour")
+	}
 	// No palette configured -> no tint even for a real repo.
 	none := model{repoColors: nil}
 	if none.repoColor("A") != nil {

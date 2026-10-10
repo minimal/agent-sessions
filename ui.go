@@ -265,6 +265,7 @@ type model struct {
 	branchIcon         string                            // glyph before the branch column; "" hides it
 	gitIcon            string                            // per-repo glyph before the branch column; "" hides it
 	repoColors         []lipgloss.TerminalColor          // palette cycled per repo for the git icon
+	repoRank           map[string]int                    // repo -> rank among loaded repos; spreads palette colours
 	dirNameOnly        bool                              // show just the directory name, not the full path
 	modelReplacer      *strings.Replacer                 // shortens displayed model names; nil leaves them unchanged
 	selColors          bool                              // keep colours on the cursor row
@@ -871,6 +872,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detectUnread(msg.sessions)
 		m.readOnScreen(msg.sessions)
 		m.all = msg.sessions
+		m.repoRank = colorRankRepos(m.all)
 		m.applyFilter()
 		m.computeWidths()
 		m.clampOffset()
@@ -2491,12 +2493,36 @@ func repoPalette(colors []string) []lipgloss.TerminalColor {
 	return out
 }
 
-// repoColor picks a stable palette colour for a repo by hashing its key, so a
-// repo keeps the same colour across runs regardless of index order. Returns nil
-// for a session outside any repo or when no palette is configured.
+// colorRankRepos numbers the distinct repos in ss by sorted key. Handing out palette
+// colours by rank, not by hash, keeps loaded repos on different colours until
+// the palette runs out.
+func colorRankRepos(ss []Session) map[string]int {
+	var repos []string
+	seen := map[string]bool{}
+	for _, s := range ss {
+		if s.Repo != "" && !seen[s.Repo] {
+			seen[s.Repo] = true
+			repos = append(repos, s.Repo)
+		}
+	}
+	sort.Strings(repos)
+	rank := make(map[string]int, len(repos))
+	for i, r := range repos {
+		rank[r] = i
+	}
+	return rank
+}
+
+// repoColor picks a palette colour for a repo: by rank among the loaded repos,
+// so repos never share a colour while the palette lasts. A repo with no rank
+// falls back to a hash of its key. Returns nil for a session outside any repo
+// or when no palette is configured.
 func (m model) repoColor(repo string) lipgloss.TerminalColor {
 	if repo == "" || len(m.repoColors) == 0 {
 		return nil
+	}
+	if i, ok := m.repoRank[repo]; ok {
+		return m.repoColors[i%len(m.repoColors)]
 	}
 	h := fnv.New32a()
 	h.Write([]byte(repo))

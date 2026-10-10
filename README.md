@@ -288,8 +288,8 @@ The `[git]` section adds an optional per-repo coloured glyph before the branch
 column, giving each repo (shared across its worktrees) a consistent colour —
 handy with `[sort] group = "repo"`. The branch name is tinted the same colour,
 so the icon and branch read as one colour-coded unit per repo. Empty (default)
-hides it. A repo's colour is picked by hashing its path, so it stays put across
-runs:
+hides it. Repos get palette colours by sorted path, so loaded repos differ until
+the palette runs out. A repo's colour can shift when repos come or go:
 
 ```toml
 [git]

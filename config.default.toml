@@ -194,8 +194,9 @@ within = ""
 # [styles.branch] fg while enabled). Empty (default) hides it; set a glyph to
 # enable, e.g. icon = "" (nf-fa-git) or a plain "•".
 icon = ""
-# Palette cycled for that glyph. A repo's colour is picked by hashing its path,
-# so it stays put across runs. Unset uses a built-in theme-following palette.
+# Palette cycled for that glyph. Loaded repos take colours in sorted-path order,
+# so they differ until the palette runs out; a colour can shift when repos come
+# or go. Unset uses a built-in theme-following palette.
 # colors = ["2", "3", "4", "5", "6", "10", "12", "13", "14", "208"]
 
 [selection]
