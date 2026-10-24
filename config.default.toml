@@ -110,9 +110,9 @@ fg = "6"
 fg = "3"
 bold = true
 
-[icons]
+[glyphs]
 # Glyphs shown before the directory and branch columns. Defaults are Nerd Font
-# icons (need a Nerd Font in your terminal); set either to "" to hide it, or a
+# glyphs (need a Nerd Font in your terminal); set either to "" to hide it, or a
 # plain char / emoji instead, e.g. dir = "📁".
 dir    = ""   # nf-fa-folder
 branch = ""   # nf-pl-branch
@@ -188,7 +188,7 @@ within = ""
 
 [git]
 # Each git repo (shared across its worktrees) gets a consistent colour on its
-# branch glyph ([icons] branch) and branch text — handy alongside [sort]
+# branch glyph ([glyphs] branch) and branch text — handy alongside [sort]
 # group = "repo". This overrides [styles.branch] fg.
 # Palette cycled per repo. Loaded repos take colours in sorted-path order,
 # so they differ until the palette runs out; a colour can shift when repos come

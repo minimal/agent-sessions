@@ -175,11 +175,11 @@ app to match, rather than the app pinning fixed colours that ignore it. Use
 `#rrggbb` hex to pin exact colours regardless of theme; the shipped default
 config includes a commented Catppuccin Mocha block to copy from.
 
-The `[icons]` section sets Nerd Font glyphs shown before the directory and
+The `[glyphs]` section sets Nerd Font glyphs shown before the directory and
 branch columns (set either to `""` to hide it, or use a plain char / emoji):
 
 ```toml
-[icons]
+[glyphs]
 dir    = ""   # nf-fa-folder
 branch = ""   # nf-pl-branch
 ```
@@ -219,8 +219,8 @@ title  = { min = 0,  max = 30 }   # the session title (cap in preview "column" m
 last   = { min = 0,  max = 100 }  # the last message (preview "column" mode only)
 ```
 
-Bounds refer to the column's *visual* width (the icon and its 1-space
-separator count against `min`/`max` when the icon is on). The defaults
+Bounds refer to the column's *visual* width (the glyph and its 1-space
+separator count against `min`/`max` when the glyph is on). The defaults
 recover a lot of horizontal space on narrow terminals — a session set
 where every branch is `main` and every pane is `0` shrinks the row by
 about 27 columns compared to the old fixed-width layout, which is the
@@ -285,7 +285,7 @@ within = ""       # a Go duration, e.g. "168h" for 7 days; "" shows every sessio
 ```
 
 The `[git]` section sets the palette that gives each repo (shared across its
-worktrees) a consistent colour on its branch glyph (`[icons] branch`) and branch
+worktrees) a consistent colour on its branch glyph (`[glyphs] branch`) and branch
 name — handy with `[sort] group = "repo"`. Repos get palette colours by sorted
 path, so loaded repos differ until the palette runs out. A repo's colour can
 shift when repos come or go:
@@ -296,7 +296,7 @@ shift when repos come or go:
 ```
 
 The `[status]` section sets the per-status marker glyphs. Defaults are Nerd
-Font icons; swap them for plain dots or emoji if your terminal lacks a Nerd
+Font glyphs; swap them for plain dots or emoji if your terminal lacks a Nerd
 Font. `running = "spinner"` animates a braille spinner instead of a static
 glyph:
 

@@ -530,33 +530,33 @@ func TestDirNameOnly(t *testing.T) {
 	}
 }
 
-func TestColumnIcons(t *testing.T) {
+func TestColumnGlyphs(t *testing.T) {
 	now := time.Now()
 	sessions := []Session{
 		{ID: "a", Title: "x", CWD: "/tmp/proj", Branch: "main", Modified: now},
 		{ID: "b", Title: "y", CWD: "/tmp/proj", Modified: now}, // no branch
 	}
 	m := testModel(previewColumn, sessions)
-	m.dirIcon = "D"
-	m.branchIcon = "B"
-	m.computeWidths() // recompute now that the icons are set
-	branchOH := iconOverhead(m.branchIcon)
+	m.dirGlyph = "D"
+	m.branchGlyph = "B"
+	m.computeWidths() // recompute now that the glyph are set
+	branchOH := glyphOverhead(m.branchGlyph)
 	out := m.View()
 
 	if !strings.Contains(out, "D /tmp/proj") {
-		t.Errorf("dir icon should precede the path, got:\n%s", out)
+		t.Errorf("dir glyph should precede the path, got:\n%s", out)
 	}
 	if !strings.Contains(out, "B main") {
-		t.Errorf("branch icon should precede the branch, got:\n%s", out)
+		t.Errorf("branch glyph should precede the branch, got:\n%s", out)
 	}
-	// The icon slot is still reserved when the value is empty (alignment),
-	// but the icon itself is not drawn for the branchless session.
-	if got := m.iconCell("B", "", m.widths.branch-branchOH, m.styles.branch, true); strings.Contains(got, "B") {
-		t.Errorf("empty branch should not draw its icon, got %q", got)
+	// The glyph slot is still reserved when the value is empty (alignment),
+	// but the glyph itself is not drawn for the branchless session.
+	if got := m.glyphCell("B", "", m.widths.branch-branchOH, m.styles.branch, true); strings.Contains(got, "B") {
+		t.Errorf("empty branch should not draw its glyph, got %q", got)
 	}
-	if lipgloss.Width(m.iconCell("B", "main", m.widths.branch-branchOH, m.styles.branch, true)) !=
-		lipgloss.Width(m.iconCell("B", "", m.widths.branch-branchOH, m.styles.branch, true)) {
-		t.Errorf("icon cell width should match whether or not the value is empty")
+	if lipgloss.Width(m.glyphCell("B", "main", m.widths.branch-branchOH, m.styles.branch, true)) !=
+		lipgloss.Width(m.glyphCell("B", "", m.widths.branch-branchOH, m.styles.branch, true)) {
+		t.Errorf("glyph cell width should match whether or not the value is empty")
 	}
 }
 
@@ -1035,14 +1035,14 @@ func TestPiEnterBuiltinNoClaudeResume(t *testing.T) {
 }
 
 // TestColWidth exercises the per-column bounds helper: max=0 hides the
-// column, otherwise the width is clamp(observed + iconOverhead, Min, Max),
+// column, otherwise the width is clamp(observed + glyphOverhead, Min, Max),
 // and a misconfigured min > max is treated as a pin to min (the larger of
 // the two — the user's likely intent).
 func TestColWidth(t *testing.T) {
 	cases := []struct {
 		name     string
 		observed int
-		iconOH   int
+		glyphOH   int
 		cfg      ColumnConfig
 		want     int
 	}{
@@ -1050,28 +1050,28 @@ func TestColWidth(t *testing.T) {
 		{"min wins when observed is small", 3, 0, ColumnConfig{Min: 8, Max: 24}, 8},
 		{"observed wins in the middle", 12, 0, ColumnConfig{Min: 8, Max: 24}, 12},
 		{"max wins when observed is large", 30, 0, ColumnConfig{Min: 8, Max: 24}, 24},
-		{"icon overhead counts against min", 5, 2, ColumnConfig{Min: 8, Max: 24}, 8},
-		{"icon overhead in the middle", 10, 2, ColumnConfig{Min: 8, Max: 24}, 12},
+		{"glyph overhead counts against min", 5, 2, ColumnConfig{Min: 8, Max: 24}, 8},
+		{"glyph overhead in the middle", 10, 2, ColumnConfig{Min: 8, Max: 24}, 12},
 		{"min > max collapses to max", 5, 0, ColumnConfig{Min: 30, Max: 10}, 10},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := colWidth(c.observed, c.iconOH, c.cfg); got != c.want {
-				t.Errorf("colWidth(%d, %d, %+v) = %d, want %d", c.observed, c.iconOH, c.cfg, got, c.want)
+			if got := colWidth(c.observed, c.glyphOH, c.cfg); got != c.want {
+				t.Errorf("colWidth(%d, %d, %+v) = %d, want %d", c.observed, c.glyphOH, c.cfg, got, c.want)
 			}
 		})
 	}
 }
 
-func TestIconOverhead(t *testing.T) {
-	if got := iconOverhead(""); got != 0 {
-		t.Errorf("empty icon overhead = %d, want 0", got)
+func TestGlyphOverhead(t *testing.T) {
+	if got := glyphOverhead(""); got != 0 {
+		t.Errorf("empty glyph overhead = %d, want 0", got)
 	}
-	if got := iconOverhead("D"); got != 2 { // 1 char + 1 space
-		t.Errorf("1-char icon overhead = %d, want 2", got)
+	if got := glyphOverhead("D"); got != 2 { // 1 char + 1 space
+		t.Errorf("1-char glyph overhead = %d, want 2", got)
 	}
-	if got := iconOverhead(""); got != 0 {
-		t.Errorf("explicit empty icon overhead = %d, want 0", got)
+	if got := glyphOverhead(""); got != 0 {
+		t.Errorf("explicit empty glyph overhead = %d, want 0", got)
 	}
 }
 

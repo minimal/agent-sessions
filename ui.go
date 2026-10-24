@@ -261,8 +261,8 @@ type model struct {
 	glyphs             map[marker]string
 	colGlyph           int                               // display width reserved for the status glyph
 	showWords          bool                              // show the state word next to the glyph
-	dirIcon            string                            // glyph before the project column; "" hides it
-	branchIcon         string                            // glyph before the branch column; "" hides it
+	dirGlyph           string                            // glyph before the project column; "" hides it
+	branchGlyph        string                            // glyph before the branch column; "" hides it
 	repoColors         []lipgloss.TerminalColor          // palette cycled per repo for the branch column
 	repoRank           map[string]int                    // repo -> rank among loaded repos; spreads palette colours
 	dirNameOnly        bool                              // show just the directory name, not the full path
@@ -414,8 +414,8 @@ func newModel(cfg Config) model {
 		glyphs:             glyphs,
 		colGlyph:           glyphWidth(glyphs),
 		showWords:          cfg.Status.Words,
-		dirIcon:            cfg.Icons.Dir,
-		branchIcon:         cfg.Icons.Branch,
+		dirGlyph:           cfg.Glyphs.Dir,
+		branchGlyph:        cfg.Glyphs.Branch,
 		repoColors:         repoPalette(cfg.Git.Colors),
 		dirNameOnly:        cfg.Display.Project == "name",
 		modelReplacer:      newModelReplacer(cfg.Display.ModelReplacements),
@@ -641,27 +641,27 @@ func agentGlyphWidth(glyphs map[string]string) int {
 	return w
 }
 
-// iconOverhead returns the display width an icon prefix takes inside its
-// column: the icon itself plus the one-space separator, or 0 if the icon is
+// glyphOverhead returns the display width an glyph prefix takes inside its
+// column: the glyph itself plus the one-space separator, or 0 if the glyph is
 // disabled. The column's configured min/max bounds are visual (total) widths,
 // so this overhead is added to the observed text width before clamping.
-func iconOverhead(icon string) int {
-	if icon == "" {
+func glyphOverhead(glyph string) int {
+	if glyph == "" {
 		return 0
 	}
-	return lipgloss.Width(icon) + 1
+	return lipgloss.Width(glyph) + 1
 }
 
 // colWidth applies a column's bounds: cfg.Max == 0 hides the column
 // (returning 0, which the renderer treats as "skip the cell and its
-// trailing gap"). Otherwise the width is clamp(observed + iconOverhead,
+// trailing gap"). Otherwise the width is clamp(observed + glyphOverhead,
 // cfg.Min, cfg.Max). A misconfigured min > max is treated as a pin to
 // cfg.Min, since the larger value is the user's intent.
-func colWidth(observed, iconOH int, cfg ColumnConfig) int {
+func colWidth(observed, glyphOH int, cfg ColumnConfig) int {
 	if cfg.Max == 0 {
 		return 0
 	}
-	w := observed + iconOH
+	w := observed + glyphOH
 	if w < cfg.Min {
 		w = cfg.Min
 	}
@@ -718,7 +718,7 @@ func (m *model) observedDirWidth() int {
 
 // observedBranchWidth returns the widest non-empty branch name across the
 // visible sessions. Empty branches and "HEAD" (detached) contribute 0 --
-// they don't pull the column down -- but iconBody still reserves the icon
+// they don't pull the column down -- but glyphBody still reserves the glyph
 // slot on those rows, so the column keeps its visual width.
 func (m *model) observedBranchWidth() int {
 	var w int
@@ -780,8 +780,8 @@ func isToday(now, when time.Time) bool {
 // per-refresh cost is negligible even with hundreds of sessions.
 func (m *model) computeWidths() {
 	cfg := m.colCfg
-	branchOH := iconOverhead(m.branchIcon)
-	m.widths.dir = colWidth(m.observedDirWidth(), iconOverhead(m.dirIcon), cfg.Dir)
+	branchOH := glyphOverhead(m.branchGlyph)
+	m.widths.dir = colWidth(m.observedDirWidth(), glyphOverhead(m.dirGlyph), cfg.Dir)
 	m.widths.branch = colWidth(m.observedBranchWidth(), branchOH, cfg.Branch)
 	m.widths.model = colWidth(m.observedModelWidth(), 0, cfg.Model)
 	m.widths.pane = colWidth(m.observedPaneWidth(), 0, cfg.Pane)
@@ -2281,8 +2281,8 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 	// column (width 0) skips both its cell and the gap that would separate
 	// it from the previous one -- keeping the row tight when the user turns
 	// columns off.
-	dirOH := iconOverhead(m.dirIcon)
-	branchOH := iconOverhead(m.branchIcon)
+	dirOH := glyphOverhead(m.dirGlyph)
+	branchOH := glyphOverhead(m.branchGlyph)
 	emit := func(cell string) {
 		b.WriteString(gap(2))
 		b.WriteString(cell)
@@ -2294,7 +2294,7 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 		if m.dirNameOnly {
 			project = s.Dir()
 		}
-		emit(seg(m.styles.project, iconBody(m.dirIcon, project, m.widths.dir-dirOH)))
+		emit(seg(m.styles.project, glyphBody(m.dirGlyph, project, m.widths.dir-dirOH)))
 	}
 
 	// worktree marker slot (between project and branch). It carries its own
@@ -2304,14 +2304,14 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 	// extends through the slot instead of breaking around the marker.
 	b.WriteString(seg(m.styles.worktree, m.worktreeCell(s)))
 
-	// branch column. The icon and the branch text share the repo's colour, so
+	// branch column. The glyph and the branch text share the repo's colour, so
 	// the whole git area reads as one colour-coded unit per repo.
 	if m.widths.branch > 0 {
 		branchStyle := m.styles.branch
 		if fg := m.repoColor(s.Repo); fg != nil {
 			branchStyle = branchStyle.Foreground(fg)
 		}
-		emit(seg(branchStyle, iconBody(m.branchIcon, s.Branch, m.widths.branch-branchOH)))
+		emit(seg(branchStyle, glyphBody(m.branchGlyph, s.Branch, m.widths.branch-branchOH)))
 	}
 
 	// model column.
@@ -2438,16 +2438,16 @@ func isNoColor(c lipgloss.TerminalColor) bool {
 	return ok
 }
 
-// iconBody is a fixed-width column value optionally prefixed with an icon. The
-// icon slot is reserved on every row (blank when the value is empty) so the
-// columns stay aligned regardless of whether the icon is drawn.
-func iconBody(icon, text string, w int) string {
+// glyphBody is a fixed-width column value optionally prefixed with an glyph. The
+// glyph slot is reserved on every row (blank when the value is empty) so the
+// columns stay aligned regardless of whether the glyph is drawn.
+func glyphBody(glyph, text string, w int) string {
 	body := truncPad(text, w)
-	if icon != "" {
+	if glyph != "" {
 		if strings.TrimSpace(text) == "" {
-			body = strings.Repeat(" ", lipgloss.Width(icon)+1) + body
+			body = strings.Repeat(" ", lipgloss.Width(glyph)+1) + body
 		} else {
-			body = icon + " " + body
+			body = glyph + " " + body
 		}
 	}
 	return body
@@ -2508,10 +2508,10 @@ func (m model) repoColor(repo string) lipgloss.TerminalColor {
 	return m.repoColors[h.Sum32()%uint32(len(m.repoColors))]
 }
 
-// iconCell renders an iconBody with a column style unless plain. Kept as a
+// glyphCell renders an glyphBody with a column style unless plain. Kept as a
 // thin wrapper for callers that want a finished cell.
-func (m model) iconCell(icon, text string, w int, st lipgloss.Style, plain bool) string {
-	body := iconBody(icon, text, w)
+func (m model) glyphCell(glyph, text string, w int, st lipgloss.Style, plain bool) string {
+	body := glyphBody(glyph, text, w)
 	if plain {
 		return body
 	}

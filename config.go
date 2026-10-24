@@ -53,10 +53,10 @@ type Config struct {
 	Ctx struct {
 		Enabled bool `toml:"enabled"` // show context usage reported by supported sources
 	} `toml:"ctx"`
-	Icons struct {
+	Glyphs struct {
 		Branch string `toml:"branch"` // shown before the branch; "" hides it
 		Dir    string `toml:"dir"`    // shown before the directory; "" hides it
-	} `toml:"icons"`
+	} `toml:"glyphs"`
 	Display struct {
 		Project           string            `toml:"project"`            // "full" path or just the "name"
 		ModelReplacements map[string]string `toml:"model_replacements"` // literal model-name fragment replacements
