@@ -114,7 +114,6 @@ type Config struct {
 		Within  string `toml:"within"`  // starting age window, a Go duration; "" or malformed = all
 	} `toml:"filter"`
 	Git struct {
-		Icon   string   `toml:"icon"`   // per-repo glyph; "" hides the column
 		Colors []string `toml:"colors"` // palette cycled per repo; empty uses a built-in one
 	} `toml:"git"`
 	Background               bool  `toml:"background"`                  // run key-bound commands detached (no terminal takeover)

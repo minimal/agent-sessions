@@ -284,16 +284,14 @@ live   = false    # true starts with the "live only" filter, like pressing o
 within = ""       # a Go duration, e.g. "168h" for 7 days; "" shows every session
 ```
 
-The `[git]` section adds an optional per-repo coloured glyph before the branch
-column, giving each repo (shared across its worktrees) a consistent colour —
-handy with `[sort] group = "repo"`. The branch name is tinted the same colour,
-so the icon and branch read as one colour-coded unit per repo. Empty (default)
-hides it. Repos get palette colours by sorted path, so loaded repos differ until
-the palette runs out. A repo's colour can shift when repos come or go:
+The `[git]` section sets the palette that gives each repo (shared across its
+worktrees) a consistent colour on its branch glyph (`[icons] branch`) and branch
+name — handy with `[sort] group = "repo"`. Repos get palette colours by sorted
+path, so loaded repos differ until the palette runs out. A repo's colour can
+shift when repos come or go:
 
 ```toml
 [git]
-icon = ""   # a glyph enables it, e.g. "" (nf-fa-git) or "◆"; "" hides it
 # colors = ["2", "3", "4", "5", "6"]   # optional palette; unset = built-in
 ```
 

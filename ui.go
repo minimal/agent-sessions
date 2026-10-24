@@ -263,8 +263,7 @@ type model struct {
 	showWords          bool                              // show the state word next to the glyph
 	dirIcon            string                            // glyph before the project column; "" hides it
 	branchIcon         string                            // glyph before the branch column; "" hides it
-	gitIcon            string                            // per-repo glyph before the branch column; "" hides it
-	repoColors         []lipgloss.TerminalColor          // palette cycled per repo for the git icon
+	repoColors         []lipgloss.TerminalColor          // palette cycled per repo for the branch column
 	repoRank           map[string]int                    // repo -> rank among loaded repos; spreads palette colours
 	dirNameOnly        bool                              // show just the directory name, not the full path
 	modelReplacer      *strings.Replacer                 // shortens displayed model names; nil leaves them unchanged
@@ -417,7 +416,6 @@ func newModel(cfg Config) model {
 		showWords:          cfg.Status.Words,
 		dirIcon:            cfg.Icons.Dir,
 		branchIcon:         cfg.Icons.Branch,
-		gitIcon:            cfg.Git.Icon,
 		repoColors:         repoPalette(cfg.Git.Colors),
 		dirNameOnly:        cfg.Display.Project == "name",
 		modelReplacer:      newModelReplacer(cfg.Display.ModelReplacements),
@@ -782,9 +780,7 @@ func isToday(now, when time.Time) bool {
 // per-refresh cost is negligible even with hundreds of sessions.
 func (m *model) computeWidths() {
 	cfg := m.colCfg
-	// The branch column carries both the branch icon prefix and the per-repo
-	// git icon prefix, so the overhead is the sum of the two.
-	branchOH := iconOverhead(m.branchIcon) + iconOverhead(m.gitIcon)
+	branchOH := iconOverhead(m.branchIcon)
 	m.widths.dir = colWidth(m.observedDirWidth(), iconOverhead(m.dirIcon), cfg.Dir)
 	m.widths.branch = colWidth(m.observedBranchWidth(), branchOH, cfg.Branch)
 	m.widths.model = colWidth(m.observedModelWidth(), 0, cfg.Model)
@@ -2287,7 +2283,6 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 	// columns off.
 	dirOH := iconOverhead(m.dirIcon)
 	branchOH := iconOverhead(m.branchIcon)
-	gitOH := iconOverhead(m.gitIcon)
 	emit := func(cell string) {
 		b.WriteString(gap(2))
 		b.WriteString(cell)
@@ -2309,30 +2304,14 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 	// extends through the slot instead of breaking around the marker.
 	b.WriteString(seg(m.styles.worktree, m.worktreeCell(s)))
 
-	// branch column, with an optional per-repo git icon prefix. When the git
-	// icon is on, the icon and the branch text share the repo's colour, so
+	// branch column. The icon and the branch text share the repo's colour, so
 	// the whole git area reads as one colour-coded unit per repo.
 	if m.widths.branch > 0 {
-		var repoFg lipgloss.TerminalColor
-		gitCell := ""
-		if m.gitIcon != "" {
-			cell := strings.Repeat(" ", lipgloss.Width(m.gitIcon)+1) // reserved, aligned slot
-			st := lipgloss.NewStyle()
-			if s.Repo != "" {
-				cell = m.gitIcon + " "
-				repoFg = m.repoColor(s.Repo)
-				if repoFg != nil {
-					st = st.Foreground(repoFg)
-				}
-			}
-			gitCell = seg(st, cell)
-		}
 		branchStyle := m.styles.branch
-		if repoFg != nil {
-			branchStyle = branchStyle.Foreground(repoFg)
+		if fg := m.repoColor(s.Repo); fg != nil {
+			branchStyle = branchStyle.Foreground(fg)
 		}
-		bodyW := m.widths.branch - branchOH - gitOH
-		emit(gitCell + seg(branchStyle, iconBody(m.branchIcon, s.Branch, bodyW)))
+		emit(seg(branchStyle, iconBody(m.branchIcon, s.Branch, m.widths.branch-branchOH)))
 	}
 
 	// model column.
@@ -2474,7 +2453,7 @@ func iconBody(icon, text string, w int) string {
 	return body
 }
 
-// defaultRepoColors is the built-in palette for the per-repo git icon, used
+// defaultRepoColors is the built-in palette for the per-repo branch colour, used
 // when the config leaves [git] colors unset. It avoids red (reserved for
 // alarming states) and leans on ANSI base colours so it follows the terminal
 // theme like the rest of the columns.
