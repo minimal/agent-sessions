@@ -110,6 +110,7 @@ the `Adapter` interface plus a `[sources.<name>]` entry — see `ADAPTERS.md`.
 | `o` | show only live sessions: those with a running agent process (toggle) |
 | `a` | cycle the age window: all / last 7 days / last 30 days |
 | `s` | cycle the sort order: `activity` / `repo` / `active,repo` (the `[sort]` presets) |
+| `T` | toggle the time column between clock and time ago (`time_format`) |
 | `t` | jump to a tmux session, chosen from a picker (Attention first; `[tmux] key`) |
 | `Esc` | clear the search, project/branch filters and age window |
 | `g` / `G` | first / last session |

@@ -711,8 +711,8 @@ func TestTmuxGlyph(t *testing.T) {
 	now := time.Now()
 	sessions := []Session{
 		{ID: "a", Title: "attached", LastMsg: "hi", Modified: now, PID: 100, Pane: "%27"},
-		{ID: "b", Title: "loose", LastMsg: "hi", Modified: now, PID: 200}, // live, no pane
-		{ID: "c", Title: "dead", LastMsg: "hi", Modified: now},            // not live
+		{ID: "b", Title: "loose", LastMsg: "hi", Modified: now, PID: 200},        // live, no pane
+		{ID: "c", Title: "dead", LastMsg: "hi", Modified: now},                   // not live
 		{ID: "d", Title: "cwd match", LastMsg: "hi", Modified: now, Pane: "%28"}, // pane, no pid
 	}
 	m := testModel(previewColumn, sessions) // column mode: one line per session
@@ -1042,7 +1042,7 @@ func TestColWidth(t *testing.T) {
 	cases := []struct {
 		name     string
 		observed int
-		glyphOH   int
+		glyphOH  int
 		cfg      ColumnConfig
 		want     int
 	}{
@@ -1449,5 +1449,81 @@ func TestIsToday(t *testing.T) {
 	}
 	if isToday(now, time.Date(2025, 1, 5, 14, 30, 0, 0, time.Local)) {
 		t.Error("same day last year: want false")
+	}
+}
+
+// TestFormatAge pins the compact time-ago units and their boundaries.
+func TestFormatAge(t *testing.T) {
+	cases := []struct {
+		d    time.Duration
+		want string
+	}{
+		{-time.Minute, "0s"},
+		{0, "0s"},
+		{59 * time.Second, "59s"},
+		{time.Minute, "1m"},
+		{119 * time.Second, "1m"},
+		{59 * time.Minute, "59m"},
+		{time.Hour, "1h"},
+		{23*time.Hour + 59*time.Minute, "23h"},
+		{24 * time.Hour, "1d"},
+		{6 * 24 * time.Hour, "6d"},
+		{7 * 24 * time.Hour, "1w"},
+		{29 * 24 * time.Hour, "4w"},
+		{30 * 24 * time.Hour, "1mo"},
+		{364 * 24 * time.Hour, "12mo"},
+		{365 * 24 * time.Hour, "1y"},
+		{200 * 365 * 24 * time.Hour, "99y"},
+	}
+	for _, tc := range cases {
+		got := formatAge(tc.d)
+		if got != tc.want {
+			t.Errorf("formatAge(%v) = %q, want %q", tc.d, got, tc.want)
+		}
+		if w := lipgloss.Width(got); w > colTime {
+			t.Errorf("formatAge(%v) = %q is %d cells, want <= %d", tc.d, got, w, colTime)
+		}
+	}
+}
+
+// TestTimeFormatToggle checks the 'T' key flips clock and relative, and that
+// an unknown configured value falls back to the clock.
+func TestTimeFormatToggle(t *testing.T) {
+	if got := normalizeTimeFormat("bogus"); got != timeFormatClock {
+		t.Errorf("normalizeTimeFormat(bogus) = %q, want clock", got)
+	}
+	m := newModel(Config{TimeFormat: timeFormatRelative})
+	if m.timeFormat != timeFormatRelative {
+		t.Fatalf("timeFormat = %q, want relative", m.timeFormat)
+	}
+	mm, _ := m.Update(key("T"))
+	if got := mm.(model).timeFormat; got != timeFormatClock {
+		t.Errorf("after T: timeFormat = %q, want clock", got)
+	}
+	mm, _ = mm.(model).Update(key("T"))
+	if got := mm.(model).timeFormat; got != timeFormatRelative {
+		t.Errorf("after T T: timeFormat = %q, want relative", got)
+	}
+}
+
+// TestAgeCellRunningStaysZero checks a running turn shows a steady 0s, while
+// idle, waiting and offline sessions show their real age.
+func TestAgeCellRunningStaysZero(t *testing.T) {
+	now := time.Date(2026, 1, 5, 14, 30, 0, 0, time.Local)
+	when := now.Add(-3 * time.Minute)
+	cases := []struct {
+		name string
+		s    Session
+		want string
+	}{
+		{"running", Session{PID: 1, State: StateRunning, Activity: when}, "0s"},
+		{"waiting", Session{PID: 1, State: StateWaiting, Activity: when}, "3m"},
+		{"idle", Session{PID: 1, State: StateIdle, Activity: when}, "3m"},
+		{"offline stale running", Session{State: StateRunning, Activity: when}, "3m"},
+	}
+	for _, tc := range cases {
+		if got := ageCell(now, tc.s); got != tc.want {
+			t.Errorf("%s: ageCell = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

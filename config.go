@@ -116,8 +116,9 @@ type Config struct {
 	Git struct {
 		Colors []string `toml:"colors"` // palette cycled per repo; empty uses a built-in one
 	} `toml:"git"`
-	Background               bool  `toml:"background"`                  // run key-bound commands detached (no terminal takeover)
-	QuickTrashThresholdBytes int64 `toml:"quick_trash_threshold_bytes"` // y/n at or below; typed "yes" above
+	TimeFormat               string `toml:"time_format"`                 // time column: "clock" (default) or "relative"
+	Background               bool   `toml:"background"`                  // run key-bound commands detached (no terminal takeover)
+	QuickTrashThresholdBytes int64  `toml:"quick_trash_threshold_bytes"` // y/n at or below; typed "yes" above
 	// Sources enables/disables each adapter. Sections absent from the user's
 	// config keep the defaults below (enabled). [sources.<name>] may carry an
 	// optional `enter` override (per-source resume syntax differs) and

@@ -133,7 +133,8 @@ const dimAfter = 24 * time.Hour
 const trashSubjectMaxWidth = 80
 
 // colCI, colCtx and colTime are fixed-width columns. The time cell is always
-// 5 cells (HH:MM today, MM-DD otherwise); the year is never shown. The dir,
+// 5 cells (HH:MM today, MM-DD otherwise, or a short age like 3m); the year is
+// never shown. The dir,
 // branch, model, pane, title and last columns are sized dynamically per the
 // [columns] config -- see widths and computeWidths.
 const (
@@ -285,6 +286,7 @@ type model struct {
 	ci                 map[string]ciEntry
 	ciPending          map[string]time.Time // slug@branch (or cwd@branch) in flight
 	sortGroup          string               // index ordering in effect; 's' cycles the presets
+	timeFormat         string               // time column format: clock or relative; 't' toggles
 	configuredSortDims []sortDim            // [sort] group parsed at startup; the status part shows only a different mode
 	all                []Session            // every session, unfiltered
 	sessions           []Session            // what the index shows: all, limited by query/project/branch
@@ -394,6 +396,7 @@ func newModel(cfg Config) model {
 	m := model{
 		loader:             newMultiLoader(adapters),
 		sortGroup:          cfg.Sort.Group,
+		timeFormat:         normalizeTimeFormat(cfg.TimeFormat),
 		configuredSortDims: dims,
 		styles:             newStyles(cfg),
 		commands:           cfg.Commands,
@@ -768,6 +771,67 @@ func timeCell(now, when time.Time) string {
 	return when.Local().Format("01-02")
 }
 
+// timeFormatClock and timeFormatRelative are the [time_format] values.
+const (
+	timeFormatClock    = "clock"
+	timeFormatRelative = "relative"
+)
+
+// normalizeTimeFormat maps a configured value to a known format. Anything
+// else falls back to the clock.
+func normalizeTimeFormat(f string) string {
+	if f == timeFormatRelative {
+		return timeFormatRelative
+	}
+	return timeFormatClock
+}
+
+// toggleTimeFormat returns the other time format.
+func toggleTimeFormat(f string) string {
+	if f == timeFormatRelative {
+		return timeFormatClock
+	}
+	return timeFormatRelative
+}
+
+// formatAge renders the time since a session's last activity in one compact
+// unit, rounded down: 5s, 3m, 2h, 4d, 3w, 5mo, 1y. The unit grows with age.
+// Future times (clock skew) show as 0s. The result is at most 4 cells.
+func formatAge(d time.Duration) string {
+	const (
+		day   = 24 * time.Hour
+		week  = 7 * day
+		month = 30 * day
+		year  = 365 * day
+	)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", max(d, 0)/time.Second)
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", d/time.Minute)
+	case d < day:
+		return fmt.Sprintf("%dh", d/time.Hour)
+	case d < week:
+		return fmt.Sprintf("%dd", d/day)
+	case d < month:
+		return fmt.Sprintf("%dw", d/week)
+	case d < year:
+		return fmt.Sprintf("%dmo", d/month)
+	default:
+		return fmt.Sprintf("%dy", min(d/year, 99))
+	}
+}
+
+// ageCell renders a session's last activity as time ago, e.g. "3m". A running
+// turn keeps writing to its transcript, so its age would flicker between 0s
+// and a few seconds; it shows a steady 0s until the session is idle or waiting.
+func ageCell(now time.Time, s Session) string {
+	if s.Live() && s.State == StateRunning {
+		return formatAge(0)
+	}
+	return formatAge(now.Sub(s.When()))
+}
+
 // isToday reports whether when falls on the same local calendar day as now.
 func isToday(now, when time.Time) bool {
 	now, when = now.Local(), when.Local()
@@ -986,6 +1050,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.applyFilter()
 		case "s":
 			m.setSortGroup(nextSortGroup(m.sortGroup))
+		case "T":
+			m.timeFormat = toggleTimeFormat(m.timeFormat)
 		case "esc":
 			// The sort mode is not a filter: Esc leaves it alone.
 			if m.filterActive() {
@@ -2115,6 +2181,7 @@ func (m model) helpView() string {
 		"    o                  toggle live only: sessions with a running agent process",
 		"    a                  cycle the age window: all, 7 days, 30 days",
 		"    s                  cycle the sort order: activity, repo, active,repo",
+		"    T                  toggle the time column: clock or time ago",
 	}
 	if m.tmuxKey != "" {
 		lines = append(lines, fmt.Sprintf(
@@ -2275,7 +2342,11 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 	if isToday(now, when) {
 		timeStyle = m.styles.timeNow
 	}
-	b.WriteString(seg(timeStyle, truncPad(timeCell(now, when), colTime)))
+	cell := timeCell(now, when)
+	if m.timeFormat == timeFormatRelative {
+		cell = ageCell(now, s)
+	}
+	b.WriteString(seg(timeStyle, truncPad(cell, colTime)))
 
 	// Dynamic-width columns. Each emit() prepends a 2-space gap, so a hidden
 	// column (width 0) skips both its cell and the gap that would separate

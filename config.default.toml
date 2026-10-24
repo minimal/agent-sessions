@@ -19,6 +19,12 @@
 # or output. Applies to every key-bound command.
 background = false
 
+# How the time column shows a session's last activity. "clock" (default) shows
+# HH:MM today and MM-DD for older dates. "relative" shows the time ago in one
+# compact unit that grows with age: 5s, 3m, 2h, 4d, 3w, 5mo, 1y. Press 'T' in
+# the TUI to toggle; this only sets the starting format.
+time_format = "clock"
+
 # Sessions at or below this transcript size use the quick y/n Trash prompt.
 # Larger sessions require typing the full word "yes".
 quick_trash_threshold_bytes = 8192
