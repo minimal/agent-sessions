@@ -116,6 +116,7 @@ type Config struct {
 	Git struct {
 		Colors []string `toml:"colors"` // palette cycled per repo; empty uses a built-in one
 	} `toml:"git"`
+	RexMode                  bool   `toml:"-"`                           // set by --rex, never read from the file
 	TimeFormat               string `toml:"time_format"`                 // time column: "clock" (default) or "relative"
 	Background               bool   `toml:"background"`                  // run key-bound commands detached (no terminal takeover)
 	QuickTrashThresholdBytes int64  `toml:"quick_trash_threshold_bytes"` // y/n at or below; typed "yes" above
