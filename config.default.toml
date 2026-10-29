@@ -284,6 +284,7 @@ glyph = "⊞"
 # and tab in the Rex app, then bring the app to the front. It always runs
 # detached, as it only drives the app. Rows not in a Rex block use the
 # [commands] enter. Set to "" to use the [commands] enter for every row.
+# "Rex Beta" is the app's name in /Applications; change it if yours differs.
 enter = '''
 {rex} --autostart=false focus -s {rex-session} {rex-block} &&
 {rex} --autostart=false do session.select session_id={rex-session} window_id={rex-window} &&

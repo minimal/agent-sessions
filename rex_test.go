@@ -493,9 +493,9 @@ func enterModel(t *testing.T, s Session) (model, string) {
 	return m, out
 }
 
-// ran runs cmd as Bubble Tea would for a detached command and returns what it
+// detachedOutput runs cmd as Bubble Tea would for a detached command and returns what it
 // wrote. A takeover command (tea.Exec) fails the test.
-func ran(t *testing.T, cmd tea.Cmd, out string) string {
+func detachedOutput(t *testing.T, cmd tea.Cmd, out string) string {
 	t.Helper()
 	if cmd == nil {
 		t.Fatal("no command ran")
@@ -518,7 +518,7 @@ func TestEnterOnARexRowRunsRexEnterDetached(t *testing.T) {
 	m, out := enterModel(t, rexRow())
 	m.bgExec = false // [rex] enter only drives the app: never a takeover
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if got := ran(t, cmd, out); got != "rex block:b" {
+	if got := detachedOutput(t, cmd, out); got != "rex block:b" {
 		t.Errorf("Enter ran %q, want [rex] enter", got)
 	}
 }
@@ -526,7 +526,7 @@ func TestEnterOnARexRowRunsRexEnterDetached(t *testing.T) {
 func TestEnterOnATmuxRowKeepsTheEnterCommand(t *testing.T) {
 	m, out := enterModel(t, Session{ID: "t", PID: 1, Pane: "%1", Modified: time.Now()})
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if got := ran(t, cmd, out); got != "enter" {
+	if got := detachedOutput(t, cmd, out); got != "enter" {
 		t.Errorf("Enter ran %q, want the enter command", got)
 	}
 }
@@ -535,7 +535,7 @@ func TestEnterIgnoresRexEnterWithoutRexMode(t *testing.T) {
 	m, out := enterModel(t, rexRow())
 	m.rexBin = ""
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if got := ran(t, cmd, out); got != "enter" {
+	if got := detachedOutput(t, cmd, out); got != "enter" {
 		t.Errorf("Enter ran %q, want the enter command", got)
 	}
 }
@@ -544,7 +544,7 @@ func TestEmptyRexEnterKeepsTheEnterCommand(t *testing.T) {
 	m, out := enterModel(t, rexRow())
 	m.rexEnter = ""
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if got := ran(t, cmd, out); got != "enter" {
+	if got := detachedOutput(t, cmd, out); got != "enter" {
 		t.Errorf("Enter ran %q, want the enter command", got)
 	}
 }
@@ -553,7 +553,7 @@ func TestRexEnterWinsOverTheSourceEnter(t *testing.T) {
 	m, out := enterModel(t, rexRow())
 	m.enterBySource = map[string]string{"claude": "printf source > " + shellQuote(out)}
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if got := ran(t, cmd, out); got != "rex block:b" {
+	if got := detachedOutput(t, cmd, out); got != "rex block:b" {
 		t.Errorf("Enter ran %q, want [rex] enter", got)
 	}
 }
@@ -563,8 +563,23 @@ func TestDoubleClickOnARexRowRunsRexEnter(t *testing.T) {
 	m.switchOnClick = true
 	m.width, m.height = 120, 10
 	_, cmd := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 1})
-	if got := ran(t, cmd, out); got != "rex block:b" {
+	if got := detachedOutput(t, cmd, out); got != "rex block:b" {
 		t.Errorf("a click ran %q, want [rex] enter", got)
+	}
+}
+
+func TestClickWithNothingToRunOnlySelects(t *testing.T) {
+	m, _ := enterModel(t, rexRow())
+	m.rexBin = "" // [rex] enter is set but not in use
+	m.commands = nil
+	m.switchOnClick = true
+	m.width, m.height = 120, 10
+	mm, cmd := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 1})
+	if cmd != nil {
+		t.Error("a click with no enter command should run nothing")
+	}
+	if got := mm.(model).lastClickRow; got != 0 {
+		t.Errorf("lastClickRow = %d, want the click kept for a double-click", got)
 	}
 }
 
