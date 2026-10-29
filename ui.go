@@ -985,7 +985,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case execDoneMsg:
 		if msg.err != nil {
-			m.notice = fmt.Sprintf("command: %s — output in %s",
+			m.notice = fmt.Sprintf("command failed: %s — output in %s",
 				msg.err, displayPath(commandLogPath()))
 		}
 		if m.loading {

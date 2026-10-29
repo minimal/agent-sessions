@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -613,6 +614,24 @@ func TestDetachedCommandOutputGoesToTheLog(t *testing.T) {
 	}
 	if !strings.Contains(string(log), "to-the-log") {
 		t.Errorf("command log = %q, want the command's output", log)
+	}
+}
+
+func TestDetachedCommandErrorCarriesItsLastLine(t *testing.T) {
+	done := execCmd("echo first; echo 'Turn on Remote Control' >&2; echo; exit 2", nil, true)().(execDoneMsg)
+	if done.err == nil {
+		t.Fatal("exit 2 should be an error")
+	}
+	if got := done.err.Error(); !strings.Contains(got, "Turn on Remote Control") || !strings.Contains(got, "exit status 2") {
+		t.Errorf("err = %q, want the last output line and the exit status", got)
+	}
+}
+
+func TestFailedDetachedCommandNoticeShowsWhy(t *testing.T) {
+	m := glyphModel()
+	after, _ := m.Update(execDoneMsg{fmt.Errorf("Turn on Remote Control (exit status 1)")})
+	if got := after.(model).notice; !strings.HasPrefix(got, "command failed: Turn on Remote Control") {
+		t.Errorf("notice = %q, want the reason first", got)
 	}
 }
 
