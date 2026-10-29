@@ -60,7 +60,10 @@ blocks, e.g. from a quick terminal outside Rex. Each refresh makes one
 read-only `rex do` call. It never starts a Rex server. Rows in a Rex block
 get a `⊞` glyph (`[rex]`), and the pane column shows the block as
 `label:shortid`. `rex` is found on `PATH`, else in the Rex app bundle.
-`Enter` does not jump to a Rex block yet.
+`Enter` on such a row runs `[rex] enter`: it focuses the block, shows its
+session and tab in the Rex app, and brings the app to the front. It runs
+detached, and needs Remote Control on in the Rex app's settings. Other rows
+keep the `[commands]` `enter`.
 
 State comes from `~/.claude/sessions/<pid>.json`, a registry each running
 Claude Code instance maintains (status `busy`/`waiting`/`idle` plus the exact

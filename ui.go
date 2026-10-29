@@ -248,6 +248,7 @@ type model struct {
 	styles             styles
 	bgExec             bool              // run key-bound commands detached (no terminal takeover)
 	rexBin             string            // the rex CLI, for {rex}; "" unless --rex found it
+	rexEnter           string            // [rex] enter: Enter on a live row in a Rex block
 	enterBySource      map[string]string // per-source override of the "enter" command (key = Source)
 	tmuxGlyph          string            // marker for tmux-attachable sessions; "" hides it
 	tmuxBar            bool              // show the Tmux Bar row ([tmux] bar)
@@ -417,6 +418,7 @@ func newModel(cfg Config) model {
 		ageWindow:          ageWindow,
 		bgExec:             cfg.Background,
 		rexBin:             rexBin,
+		rexEnter:           cfg.Rex.Enter,
 		enterBySource:      enterBySource,
 		tmuxGlyph:          cfg.Tmux.Glyph,
 		tmuxBar:            cfg.Tmux.Bar,
@@ -634,6 +636,7 @@ type promptState struct {
 	token  string            // the exact {text-input...} placeholder being filled
 	tmpl   string            // the command awaiting the text
 	vars   map[string]string // expansion vars captured at keypress
+	bg     bool              // run the command detached
 }
 
 type trashConfirmation struct {
@@ -1029,6 +1032,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clampOffset()
 			return m, cmd
 		}
+		if msg.String() == "enter" {
+			return m.runEnter()
+		}
 		if tmpl := m.commands[msg.String()]; tmpl != "" {
 			return m.runCommand(tmpl)
 		}
@@ -1190,9 +1196,9 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	m.cursor = si
 	m.lastClickRow, m.lastClickAt = si, now
 	m.clampOffset()
-	if tmpl := m.commands["enter"]; tmpl != "" && (m.switchOnClick || doubleClick) {
+	if (m.commands["enter"] != "" || m.rexEnter != "") && (m.switchOnClick || doubleClick) {
 		m.lastClickRow = -1 // consumed; don't let a third click re-switch
-		return m.runCommand(tmpl)
+		return m.runEnter()
 	}
 	return m, nil
 }
@@ -1253,7 +1259,28 @@ func (m model) runCommand(tmpl string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	s := m.sessions[m.cursor]
-	tmpl = sourceEnterTemplate(s.Source, tmpl, m.enterBySource)
+	return m.runTemplate(s, sourceEnterTemplate(s.Source, tmpl, m.enterBySource), m.bgExec)
+}
+
+// runEnter runs Enter on the selected session. A live row in a Rex block
+// runs [rex] enter, detached: it only drives the Rex app, so a terminal
+// takeover would just flash the screen. Every other row runs the "enter"
+// command.
+func (m model) runEnter() (tea.Model, tea.Cmd) {
+	if m.cursor < len(m.sessions) && m.rexEnter != "" && m.rexMode() {
+		if s := m.sessions[m.cursor]; s.Mux() == "rex" {
+			return m.runTemplate(s, m.rexEnter, true)
+		}
+	}
+	if tmpl := m.commands["enter"]; tmpl != "" {
+		return m.runCommand(tmpl)
+	}
+	return m, nil
+}
+
+// runTemplate fills the placeholders of tmpl for s and runs it; bg runs it
+// detached.
+func (m model) runTemplate(s Session, tmpl string, bg bool) (tea.Model, tea.Cmd) {
 	vars := commandVars(s)
 	// {pid} needs a real process -- a PID of 0 is meaningless to substitute -- so
 	// a template using it requires a live session. {pane} is left empty when
@@ -1287,18 +1314,18 @@ func (m model) runCommand(tmpl string) (tea.Model, tea.Cmd) {
 		vars["rex"] = m.rexBin
 	}
 	delete(m.unread, s.ID) // acting on a session counts as reading it
-	return m.continueCommand(tmpl, vars)
+	return m.continueCommand(tmpl, vars, bg)
 }
 
 // continueCommand resolves the next interactive placeholder in a command
 // template — opening the project picker or the text prompt — and executes
 // the command once none remain.
-func (m model) continueCommand(tmpl string, vars map[string]string) (tea.Model, tea.Cmd) {
+func (m model) continueCommand(tmpl string, vars map[string]string, bg bool) (tea.Model, tea.Cmd) {
 	if strings.Contains(tmpl, "{project-picker}") && vars["project-picker"] == "" {
 		m.openPicker("Select a project", m.projectList(), displayPath,
 			func(m model, choice string) (tea.Model, tea.Cmd) {
 				vars["project-picker"] = choice
-				return m.continueCommand(tmpl, vars)
+				return m.continueCommand(tmpl, vars, bg)
 			})
 		return m, nil
 	}
@@ -1307,12 +1334,12 @@ func (m model) continueCommand(tmpl string, vars map[string]string) (tea.Model, 
 		if label == "" {
 			label = "Input"
 		}
-		m.prompt = promptState{active: true, label: label, token: match[0], tmpl: tmpl, vars: vars}
+		m.prompt = promptState{active: true, label: label, token: match[0], tmpl: tmpl, vars: vars, bg: bg}
 		m.input = newLineInput()
 		return m, nil
 	}
 	m.cursorHidden = true // hide the highlight until the next key or focus
-	return m, execCmd(tmpl, vars, m.bgExec)
+	return m, execCmd(tmpl, vars, bg)
 }
 
 // projectList returns every known project cwd, most recently used first.
@@ -1380,7 +1407,7 @@ func (m model) handlePromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		p := m.prompt
 		tmpl := strings.ReplaceAll(p.tmpl, p.token, shellQuote(m.input.Value()))
 		m.prompt = promptState{}
-		return m.continueCommand(tmpl, p.vars)
+		return m.continueCommand(tmpl, p.vars, p.bg)
 	case "esc":
 		m.prompt = promptState{}
 		return m, nil
@@ -2233,6 +2260,10 @@ func (m model) helpView() string {
 	if m.tmuxJump != "" {
 		lines = append(lines, fmt.Sprintf(
 			"    %-18s the Jump template a chip click or the key runs", "[commands] tmux"))
+	}
+	if m.rexMode() && m.rexEnter != "" {
+		lines = append(lines, fmt.Sprintf(
+			"    %-18s what Enter runs on a live row in a Rex block", "[rex] enter"))
 	}
 	lines = append(lines,
 		"    d                  move session to Trash (large sessions: type yes)",

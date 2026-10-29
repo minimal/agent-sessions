@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -476,6 +477,127 @@ func TestOptionalRexPlaceholderRunsForAnyRow(t *testing.T) {
 		t.Error("{rex-block?} should expand empty, not block")
 	} else if done := cmd().(execDoneMsg); done.err != nil {
 		t.Errorf("{rex-block?} should expand empty: %v", done.err)
+	}
+}
+
+// enterModel is a Rex-mode model whose Enter commands write what ran to a file.
+func enterModel(t *testing.T, s Session) (model, string) {
+	t.Helper()
+	out := filepath.Join(t.TempDir(), "out")
+	m := glyphModel()
+	m.rexBin = "/opt/rex"
+	m.rexEnter = "printf 'rex %s' {rex-block} > " + shellQuote(out)
+	m.commands = map[string]string{"enter": "printf enter > " + shellQuote(out)}
+	m.bgExec = true
+	m.sessions = []Session{s}
+	return m, out
+}
+
+// ran runs cmd as Bubble Tea would for a detached command and returns what it
+// wrote. A takeover command (tea.Exec) fails the test.
+func ran(t *testing.T, cmd tea.Cmd, out string) string {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("no command ran")
+	}
+	done, ok := cmd().(execDoneMsg)
+	if !ok {
+		t.Fatal("the command took over the terminal; want it detached")
+	}
+	if done.err != nil {
+		t.Fatal(done.err)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(got)
+}
+
+func TestEnterOnARexRowRunsRexEnterDetached(t *testing.T) {
+	m, out := enterModel(t, rexRow())
+	m.bgExec = false // [rex] enter only drives the app: never a takeover
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := ran(t, cmd, out); got != "rex block:b" {
+		t.Errorf("Enter ran %q, want [rex] enter", got)
+	}
+}
+
+func TestEnterOnATmuxRowKeepsTheEnterCommand(t *testing.T) {
+	m, out := enterModel(t, Session{ID: "t", PID: 1, Pane: "%1", Modified: time.Now()})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := ran(t, cmd, out); got != "enter" {
+		t.Errorf("Enter ran %q, want the enter command", got)
+	}
+}
+
+func TestEnterIgnoresRexEnterWithoutRexMode(t *testing.T) {
+	m, out := enterModel(t, rexRow())
+	m.rexBin = ""
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := ran(t, cmd, out); got != "enter" {
+		t.Errorf("Enter ran %q, want the enter command", got)
+	}
+}
+
+func TestEmptyRexEnterKeepsTheEnterCommand(t *testing.T) {
+	m, out := enterModel(t, rexRow())
+	m.rexEnter = ""
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := ran(t, cmd, out); got != "enter" {
+		t.Errorf("Enter ran %q, want the enter command", got)
+	}
+}
+
+func TestRexEnterWinsOverTheSourceEnter(t *testing.T) {
+	m, out := enterModel(t, rexRow())
+	m.enterBySource = map[string]string{"claude": "printf source > " + shellQuote(out)}
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := ran(t, cmd, out); got != "rex block:b" {
+		t.Errorf("Enter ran %q, want [rex] enter", got)
+	}
+}
+
+func TestDoubleClickOnARexRowRunsRexEnter(t *testing.T) {
+	m, out := enterModel(t, rexRow())
+	m.switchOnClick = true
+	m.width, m.height = 120, 10
+	_, cmd := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 1})
+	if got := ran(t, cmd, out); got != "rex block:b" {
+		t.Errorf("a click ran %q, want [rex] enter", got)
+	}
+}
+
+func TestDefaultRexEnter(t *testing.T) {
+	var cfg Config
+	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	tmpl := cfg.Rex.Enter
+	for _, want := range []string{"{rex} --autostart=false focus", "session.select", "{rex-session}", "{rex-window}", "{rex-block}", `open -a "Rex Beta"`} {
+		if !strings.Contains(tmpl, want) {
+			t.Errorf("[rex] enter should contain %s, got %q", want, tmpl)
+		}
+	}
+	vars := commandVars(rexRow())
+	vars["rex"] = "/opt/rex"
+	if line := expandCommand(tmpl, vars); strings.ContainsAny(line, "{}") {
+		t.Errorf("expanded [rex] enter keeps a placeholder: %q", line)
+	}
+}
+
+func TestDetachedCommandOutputGoesToTheLog(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	done := execCmd("echo to-the-log; exit 3", nil, true)().(execDoneMsg)
+	if done.err == nil {
+		t.Error("exit 3 should be an error")
+	}
+	log, err := os.ReadFile(commandLogPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(log), "to-the-log") {
+		t.Errorf("command log = %q, want the command's output", log)
 	}
 }
 

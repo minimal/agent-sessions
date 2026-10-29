@@ -30,18 +30,51 @@ func commandLogPath() string {
 
 // execCmd runs an expanded command template. With bg it runs detached — no
 // alt-screen handoff (which flashes the app closed) and no output to corrupt
-// the display, suiting commands that only orchestrate tmux. Otherwise the
-// command takes over the terminal so interactive ones (an editor,
-// claude --resume) work, teeing everything it prints to the command log.
+// the display, suiting commands that only orchestrate tmux or Rex. Otherwise
+// the command takes over the terminal so interactive ones (an editor,
+// claude --resume) work. Either way, everything it prints goes to the
+// command log.
 func execCmd(tmpl string, vars map[string]string, bg bool) tea.Cmd {
 	line := expandCommand(tmpl, vars)
 	if bg {
 		return func() tea.Msg {
-			return execDoneMsg{exec.Command("sh", "-c", line).Run()}
+			return execDoneMsg{withCommandLog(line, func(logf *os.File) error {
+				cmd := exec.Command("sh", "-c", line)
+				if logf != nil {
+					cmd.Stdout, cmd.Stderr = logf, logf
+				}
+				return cmd.Run()
+			})}
 		}
 	}
 	return tea.Exec(&loggedCommand{line: line},
 		func(err error) tea.Msg { return execDoneMsg{err} })
+}
+
+// withCommandLog runs one command, framed in the command log by its line and
+// its exit status. run gets the open log, or nil when it can't be opened.
+func withCommandLog(line string, run func(logf *os.File) error) error {
+	var logf *os.File
+	if path := commandLogPath(); path != "" {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
+			logf, _ = os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		}
+	}
+	start := time.Now()
+	if logf != nil {
+		defer logf.Close()
+		fmt.Fprintf(logf, "=== %s run: %s\n", start.Format(time.DateTime), line)
+	}
+	err := run(logf)
+	if logf != nil {
+		status := "exit 0"
+		if err != nil {
+			status = err.Error()
+		}
+		fmt.Fprintf(logf, "=== %s %s (%s)\n\n",
+			time.Now().Format(time.DateTime), status, time.Since(start).Round(time.Millisecond))
+	}
+	return err
 }
 
 // loggedCommand is a tea.ExecCommand that gives `sh -c line` the real
@@ -59,27 +92,7 @@ func (c *loggedCommand) SetStdout(w io.Writer) { c.stdout = w }
 func (c *loggedCommand) SetStderr(io.Writer)   {}
 
 func (c *loggedCommand) Run() error {
-	var logf *os.File
-	if path := commandLogPath(); path != "" {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
-			logf, _ = os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-		}
-	}
-	start := time.Now()
-	if logf != nil {
-		defer logf.Close()
-		fmt.Fprintf(logf, "=== %s run: %s\n", start.Format(time.DateTime), c.line)
-	}
-	err := c.run(logf)
-	if logf != nil {
-		status := "exit 0"
-		if err != nil {
-			status = err.Error()
-		}
-		fmt.Fprintf(logf, "=== %s %s (%s)\n\n",
-			time.Now().Format(time.DateTime), status, time.Since(start).Round(time.Millisecond))
-	}
-	return err
+	return withCommandLog(c.line, c.run)
 }
 
 func (c *loggedCommand) run(logf *os.File) error {
