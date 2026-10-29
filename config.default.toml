@@ -309,6 +309,11 @@ click_action = "select"
 # running, so one command (or a script it calls, e.g.
 # open-session {state} {pane?} {cwd} {id}) can branch on it.
 #
+# {rex} is the path of the rex CLI, found on PATH or in the Rex app bundle.
+# It is set only when agent-sessions runs with --rex. Pass --autostart=false
+# so a command never starts a Rex server:
+#   {rex} --autostart=false ls
+#
 # More examples:
 #   o = "cd {cwd} && $EDITOR ."
 #   t = "less +G {file}"
