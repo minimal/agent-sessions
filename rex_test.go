@@ -597,8 +597,77 @@ func TestDefaultRexEnter(t *testing.T) {
 	}
 	vars := commandVars(rexRow())
 	vars["rex"] = "/opt/rex"
-	if line := expandCommand(tmpl, vars); strings.ContainsAny(line, "{}") {
+	if line := expandCommand(tmpl, vars); strings.Contains(line, "{rex") {
 		t.Errorf("expanded [rex] enter keeps a placeholder: %q", line)
+	}
+}
+
+// runDefaultRexEnter runs the shipped [rex] enter for rexRow with fake rex,
+// osascript and open, and returns the calls they logged, one per line.
+func runDefaultRexEnter(t *testing.T, termProgram string, rexFails bool) ([]string, error) {
+	t.Helper()
+	var cfg Config
+	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	calls := filepath.Join(dir, "calls")
+	exit := "0"
+	if rexFails {
+		exit = "1"
+	}
+	for name, body := range map[string]string{
+		"rex":       `echo "rex $2" >> "$CALLS"; exit ` + exit,
+		"osascript": `cat > /dev/null; echo "osascript $2" >> "$CALLS"`,
+		"open":      `echo "open $*" >> "$CALLS"`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("CALLS", calls)
+	t.Setenv("PATH", dir+":/usr/bin:/bin")
+	t.Setenv("TERM_PROGRAM", termProgram)
+	vars := commandVars(rexRow())
+	vars["rex"] = filepath.Join(dir, "rex")
+	err := execCmd(cfg.Rex.Enter, vars, true)().(execDoneMsg).err
+	data, _ := os.ReadFile(calls)
+	return strings.Split(strings.TrimSpace(string(data)), "\n"), err
+}
+
+func TestDefaultRexEnterHidesTheQuickTerminalFirst(t *testing.T) {
+	calls, err := runDefaultRexEnter(t, "ghostty", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"rex focus", "rex do", "osascript /dev/", "open -a Rex Beta"}
+	if len(calls) != len(want) {
+		t.Fatalf("calls = %q, want %q", calls, want)
+	}
+	for i := range want {
+		if !strings.HasPrefix(calls[i], want[i]) {
+			t.Errorf("call %d = %q, want %q", i, calls[i], want[i])
+		}
+	}
+}
+
+func TestDefaultRexEnterSkipsGhosttyOutsideGhostty(t *testing.T) {
+	calls, err := runDefaultRexEnter(t, "rex", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"rex focus", "rex do", "open -a Rex Beta"}; !slices.Equal(calls, want) {
+		t.Errorf("calls = %q, want %q", calls, want)
+	}
+}
+
+func TestDefaultRexEnterStopsWhenRexFails(t *testing.T) {
+	calls, err := runDefaultRexEnter(t, "ghostty", true)
+	if err == nil {
+		t.Error("a failed rex call should fail the command")
+	}
+	if want := []string{"rex focus"}; !slices.Equal(calls, want) {
+		t.Errorf("calls = %q, want only the failed focus", calls)
 	}
 }
 

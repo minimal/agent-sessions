@@ -285,9 +285,28 @@ glyph = "⊞"
 # detached, as it only drives the app. Rows not in a Rex block use the
 # [commands] enter. Set to "" to use the [commands] enter for every row.
 # "Rex Beta" is the app's name in /Applications; change it if yours differs.
+#
+# In the Ghostty quick terminal, the osascript step hides the quick terminal
+# first: when Rex is already the active app, open -a changes no focus, so
+# the quick terminal would stay. The quick terminal is the Ghostty terminal
+# with this TUI's tty that is in no Ghostty window. Anywhere else it does
+# nothing.
 enter = '''
 {rex} --autostart=false focus -s {rex-session} {rex-block} &&
-{rex} --autostart=false do session.select session_id={rex-session} window_id={rex-window} &&
+{rex} --autostart=false do session.select session_id={rex-session} window_id={rex-window} || exit
+if [ "$TERM_PROGRAM" = ghostty ]; then
+    osascript - "/dev/$(ps -o tty= -p $PPID | tr -d ' ')" <<'EOF' 2>/dev/null
+on run {t}
+  if application "Ghostty" is not running then return
+  tell application "Ghostty"
+    repeat with w in windows
+      if (count of (terminals of w whose tty is t)) > 0 then return
+    end repeat
+    perform action "toggle_quick_terminal" on (first terminal whose tty is t)
+  end tell
+end run
+EOF
+fi
 open -a "Rex Beta"
 '''
 
