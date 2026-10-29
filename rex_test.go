@@ -416,6 +416,69 @@ func TestRexGlyphDefaultsWhenTheUserFileLacksIt(t *testing.T) {
 	}
 }
 
+// rexRow is a live claude session in a Rex block.
+func rexRow() Session {
+	return Session{
+		ID: "r", Source: "claude", Title: "in rex", PID: 1, State: StateIdle, Modified: time.Now(),
+		Rex: RexTarget{SessionID: "session:s", WindowID: "window:w", BlockID: "block:b", Label: "bold-marsh"},
+	}
+}
+
+func TestRexPlaceholdersForALiveRexRow(t *testing.T) {
+	vars := commandVars(rexRow())
+	for k, want := range map[string]string{
+		"rex-session": "session:s", "rex-session?": "session:s",
+		"rex-window": "window:w", "rex-window?": "window:w",
+		"rex-block": "block:b", "rex-block?": "block:b",
+	} {
+		if vars[k] != want {
+			t.Errorf("{%s} = %q, want %q", k, vars[k], want)
+		}
+	}
+}
+
+func TestRexPlaceholdersEmptyForOtherRows(t *testing.T) {
+	dead := rexRow()
+	dead.PID = 0
+	for name, s := range map[string]Session{
+		"tmux":    {ID: "t", PID: 1, Pane: "%1"},
+		"offline": {ID: "o"},
+		"dead":    dead,
+	} {
+		vars := commandVars(s)
+		for _, k := range []string{"rex-session", "rex-session?", "rex-window", "rex-window?", "rex-block", "rex-block?"} {
+			if v, ok := vars[k]; !ok || v != "" {
+				t.Errorf("%s: {%s} = %q (set %v), want empty", name, k, v, ok)
+			}
+		}
+	}
+}
+
+func TestRexPlaceholderNeedsARexRow(t *testing.T) {
+	for _, tmpl := range []string{"echo {rex-session}", "echo {rex-window}", "echo {rex-block}"} {
+		m := glyphModel()
+		m.sessions = []Session{{ID: "t", PID: 1, Pane: "%1", Modified: time.Now()}}
+		after, cmd := m.runCommand(tmpl)
+		if cmd != nil {
+			t.Errorf("%q should not run for a tmux row", tmpl)
+		}
+		if !strings.Contains(after.(model).notice, "Rex block") {
+			t.Errorf("%q: notice = %q, want a Rex block notice", tmpl, after.(model).notice)
+		}
+	}
+}
+
+func TestOptionalRexPlaceholderRunsForAnyRow(t *testing.T) {
+	m := glyphModel()
+	m.bgExec = true
+	m.sessions = []Session{{ID: "t", PID: 1, Pane: "%1", Modified: time.Now()}}
+	if _, cmd := m.runCommand("test -z {rex-block?}"); cmd == nil {
+		t.Error("{rex-block?} should expand empty, not block")
+	} else if done := cmd().(execDoneMsg); done.err != nil {
+		t.Errorf("{rex-block?} should expand empty: %v", done.err)
+	}
+}
+
 // TestPollRexLive runs the real poll against a running Rex server. It skips
 // when there is no rex CLI or no server.
 func TestPollRexLive(t *testing.T) {

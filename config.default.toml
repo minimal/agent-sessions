@@ -321,6 +321,10 @@ click_action = "select"
 # A command inherits REX_SESSION and REX_BLOCK. Inside Rex these name the
 # block agent-sessions runs in, so give rex an explicit -s and -b.
 #
+# {rex-session}, {rex-window} and {rex-block} are the ids of the Rex block
+# hosting a live session. A command using them runs only on such a row; the
+# ? forms ({rex-block?}, ...) expand empty on other rows instead.
+#
 # More examples:
 #   o = "cd {cwd} && $EDITOR ."
 #   t = "less +G {file}"

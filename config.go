@@ -306,6 +306,10 @@ func (sc StyleConfig) style() lipgloss.Style {
 // label after a colon: {text-input:Initial prompt}.
 var textInputRe = regexp.MustCompile(`\{text-input(?::([^}]*))?\}`)
 
+// rexVarRe matches the Rex placeholders that need a Rex row: {rex-session},
+// {rex-window}, {rex-block}. Their ? forms do not match.
+var rexVarRe = regexp.MustCompile(`\{rex-(session|window|block)\}`)
+
 // expandCommand substitutes {key} placeholders in a command template with
 // shell-quoted values.
 func expandCommand(tmpl string, vars map[string]string) string {
