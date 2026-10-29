@@ -247,8 +247,7 @@ type model struct {
 	loader             *multiLoader
 	styles             styles
 	bgExec             bool              // run key-bound commands detached (no terminal takeover)
-	rexMode            bool              // --rex: map live rows to Rex blocks
-	rexBin             string            // the rex CLI, for {rex}; "" unless rexMode
+	rexBin             string            // the rex CLI, for {rex}; "" unless --rex found it
 	enterBySource      map[string]string // per-source override of the "enter" command (key = Source)
 	tmuxGlyph          string            // marker for tmux-attachable sessions; "" hides it
 	tmuxBar            bool              // show the Tmux Bar row ([tmux] bar)
@@ -417,7 +416,6 @@ func newModel(cfg Config) model {
 		liveOnly:           liveOnly,
 		ageWindow:          ageWindow,
 		bgExec:             cfg.Background,
-		rexMode:            rexBin != "",
 		rexBin:             rexBin,
 		enterBySource:      enterBySource,
 		tmuxGlyph:          cfg.Tmux.Glyph,
@@ -1580,7 +1578,7 @@ func (m *model) applyFilter() {
 	if m.sortGroup != "" && !sameSortDims(parseSortDims(m.sortGroup), m.configuredSortDims) {
 		parts = append(parts, "sorted by "+m.sortGroup)
 	}
-	if m.rexMode {
+	if m.rexMode() {
 		parts = append(parts, "rex")
 	}
 	m.status = strings.Join(parts, ", ")
@@ -2678,22 +2676,31 @@ func (m model) statusCell(mk marker) string {
 	return pad(g, m.colGlyph)
 }
 
+// rexMode reports whether --rex is on and found the rex CLI.
+func (m model) rexMode() bool {
+	return m.rexBin != ""
+}
+
 // tmuxCell is the fixed-width session-reachability marker slot: the glyph
-// for sessions attachable via a tmux pane, or a Rex block, or — mutually
-// exclusive, since a live session is either sitting in a pane or running as
-// an unattached `claude --background` job, never both — the glyph for a
-// background job, blank otherwise. The widest of the configured glyphs sets
-// the slot's width, so columns stay aligned whichever one shows. It is empty
-// (no slot at all) when every marker is disabled.
+// for sessions attachable via a tmux pane, or — mutually exclusive, since a
+// live session is either sitting in a pane or running as an unattached
+// `claude --background` job, never both — the glyph for a background job,
+// blank otherwise. In Rex mode a session in a Rex block gets the rex glyph.
+// The widest glyph in use sets the slot's width, so columns stay aligned
+// whichever one shows. It is empty (no slot at all) when every marker is
+// disabled.
 func (m model) tmuxCell(s Session) string {
-	w := max(lipgloss.Width(m.tmuxGlyph), lipgloss.Width(m.rexGlyph), lipgloss.Width(m.bgGlyph))
+	w := max(lipgloss.Width(m.tmuxGlyph), lipgloss.Width(m.bgGlyph))
+	if m.rexMode() {
+		w = max(w, lipgloss.Width(m.rexGlyph))
+	}
 	if w == 0 {
 		return ""
 	}
 	switch {
 	case s.InTmux():
 		return "  " + pad(m.tmuxGlyph, w)
-	case s.Mux() == "rex":
+	case m.rexMode() && s.Mux() == "rex":
 		return "  " + pad(m.rexGlyph, w)
 	case s.Background:
 		return "  " + pad(m.bgGlyph, w)

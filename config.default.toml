@@ -318,6 +318,8 @@ click_action = "select"
 # It is set only when agent-sessions runs with --rex. Pass --autostart=false
 # so a command never starts a Rex server:
 #   {rex} --autostart=false ls
+# A command inherits REX_SESSION and REX_BLOCK. Inside Rex these name the
+# block agent-sessions runs in, so give rex an explicit -s and -b.
 #
 # More examples:
 #   o = "cd {cwd} && $EDITOR ."

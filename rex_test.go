@@ -107,7 +107,7 @@ func TestRexModeWithoutTheCLINotices(t *testing.T) {
 	if !strings.Contains(m.notice, "rex") {
 		t.Errorf("notice = %q, want a missing-rex notice", m.notice)
 	}
-	if m.rexMode {
+	if m.rexMode() {
 		t.Error("rex mode should be off when the CLI is missing")
 	}
 }
@@ -348,6 +348,7 @@ func TestRexGlyphKeepsRowsAligned(t *testing.T) {
 		{ID: "n", Title: "none", Modified: now},
 	}
 	m := testModel(previewColumn, sessions)
+	m.rexBin = "/opt/rex"
 	m.tmuxGlyph, m.rexGlyph, m.bgGlyph = "⊟", "rex", "bg"
 
 	want := map[string]string{"t": "⊟", "r": "rex", "b": "bg", "n": ""}
@@ -362,9 +363,20 @@ func TestRexGlyphKeepsRowsAligned(t *testing.T) {
 	}
 }
 
+func TestRexGlyphTakesNoSpaceWithoutRexMode(t *testing.T) {
+	s := Session{ID: "t", PID: 1, Pane: "%1"}
+	m := testModel(previewColumn, []Session{s})
+	m.rexBin = ""
+	m.tmuxGlyph, m.rexGlyph, m.bgGlyph = "⊟", "rex", "bg"
+	if got := m.tmuxCell(s); got != "  ⊟ " {
+		t.Errorf("cell = %q, want the rex glyph to leave the slot width alone", got)
+	}
+}
+
 func TestRexGlyphOnlyHidesItself(t *testing.T) {
 	s := Session{ID: "r", PID: 2, Rex: RexTarget{BlockID: "block:b"}}
 	m := testModel(previewColumn, []Session{s})
+	m.rexBin = "/opt/rex"
 	m.tmuxGlyph, m.rexGlyph, m.bgGlyph = "", "", ""
 	if got := m.tmuxCell(s); got != "" {
 		t.Errorf("all glyphs off: cell = %q, want no slot", got)

@@ -120,7 +120,7 @@ type Adapter interface {
     // cheap — use transcriptCache (below) to get that for free.
     Sessions() ([]Session, error)
 
-    // Live attaches running-process state (State, PID, Pane) in place,
+    // Live attaches running-process state (State, PID, Pane, Rex) in place,
     // best-effort. Sources with no usable live signal (e.g. pi without a
     // marker-writing extension, which has no per-process registry) implement
     // a no-op; sessions then surface as "offline" but still sort to the

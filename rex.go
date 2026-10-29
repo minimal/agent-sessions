@@ -13,8 +13,8 @@ import (
 )
 
 // rexBundlePath is where the Rex app keeps its CLI, relative to $HOME. Outside
-// Rex (the Ghostty quick terminal, a login shell) `rex` is not on PATH, so this
-// is the usual hit.
+// Rex (the Ghostty quick terminal, a login shell) `rex` is not on PATH, so
+// findRex usually finds it here.
 const rexBundlePath = "Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app/Contents/MacOS/rex"
 
 // rexTimeout caps one rex call. A poll takes about 50 ms; a hung server must
@@ -69,6 +69,7 @@ func (r rexCLI) run(stdin string, args ...string) ([]byte, error) {
 	defer cancel()
 	cmd := r.command(ctx, args...)
 	cmd.Stdin = strings.NewReader(stdin)
+	cmd.WaitDelay = timeout // a child that keeps stdout open can't outlast the kill
 	return cmd.Output()
 }
 
@@ -144,6 +145,7 @@ func rexBlockFor(blocks []rexBlock, pid int) (rexBlock, bool) {
 	return rexBlock{}, false
 }
 
+// hasAnyPrefix reports whether s starts with one of prefixes.
 func hasAnyPrefix(s string, prefixes []string) bool {
 	for _, p := range prefixes {
 		if strings.HasPrefix(s, p) {

@@ -50,7 +50,7 @@ func TestStatusShowsRexMode(t *testing.T) {
 	if strings.Contains(m.status, "rex") {
 		t.Errorf("status without rex mode = %q, want no rex", m.status)
 	}
-	m.rexMode = true
+	m.rexBin = "/opt/rex"
 	m.applyFilter()
 	if !strings.Contains(m.status, "rex") {
 		t.Errorf("status in rex mode = %q, want rex", m.status)
