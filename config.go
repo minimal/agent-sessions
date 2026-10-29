@@ -165,7 +165,7 @@ type ColumnBounds struct {
 	Dir    ColumnConfig `toml:"dir"`    // the project column
 	Branch ColumnConfig `toml:"branch"` // the git branch column
 	Model  ColumnConfig `toml:"model"`  // the model column
-	Pane   ColumnConfig `toml:"pane"`   // the tmux pane
+	Pane   ColumnConfig `toml:"pane"`   // the tmux pane or Rex block
 	Title  ColumnConfig `toml:"title"`  // the session title (cap in preview "column" mode)
 	Last   ColumnConfig `toml:"last"`   // the last message (preview "column" mode only)
 }

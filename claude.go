@@ -53,7 +53,8 @@ type transcriptLine struct {
 // live-process registry under ~/.claude/sessions. It is the existing behaviour
 // extracted behind the Adapter interface — no logic changed, just moved.
 type claudeAdapter struct {
-	cache *transcriptCache
+	cache   *transcriptCache
+	rexPoll func() []rexBlock // lists Rex blocks; nil unless --rex
 }
 
 func newClaudeAdapter() *claudeAdapter {
@@ -103,10 +104,16 @@ func (a *claudeAdapter) Sessions() ([]Session, error) {
 //
 // The registry's "status" is live for background jobs as much as interactive
 // ones -- see the note on registryStates before reaching for the CLI.
+//
+// In Rex the registry records no pane. With --rex, a session with no tmux
+// pane is matched to the Rex block whose foreground is its pid. Rex is polled
+// at most once per call. The background guard holds here too.
 func (a *claudeAdapter) Live(sessions []Session) {
 	live := liveStates()
 	var panes map[string]paneInfo
 	loaded := false
+	var blocks []rexBlock
+	rexLoaded := false
 	for i := range sessions {
 		if sessions[i].Source != "claude" {
 			continue
@@ -120,7 +127,16 @@ func (a *claudeAdapter) Live(sessions []Session) {
 		sessions[i].Background = info.Background
 		sessions[i].JobID = info.JobID
 		if info.Pane == "" {
-			continue // the registry records no pane: nothing to jump to
+			// The registry records no tmux pane: try Rex, then nothing to jump to.
+			if a.rexPoll != nil && !info.Background {
+				if !rexLoaded {
+					blocks, rexLoaded = a.rexPoll(), true
+				}
+				if b, ok := rexBlockFor(blocks, info.PID); ok {
+					sessions[i].Rex = b.RexTarget
+				}
+			}
+			continue
 		}
 		if !loaded {
 			panes, loaded = tmuxPaneTargets(), true

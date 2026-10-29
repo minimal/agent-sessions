@@ -148,7 +148,7 @@ project = "full"
 dir    = { min = 8,  max = 28 }   # the project column
 branch = { min = 8,  max = 24 }   # the git branch column
 model  = { min = 0,  max = 24 }   # the agent model; min=0 lets it collapse
-pane   = { min = 0,  max = 12 }   # the tmux pane; min=0 lets it collapse
+pane   = { min = 0,  max = 12 }   # the tmux pane or Rex block; min=0 lets it collapse
 title  = { min = 0,  max = 30 }   # the session title (cap in preview "column" mode)
 last   = { min = 0,  max = 100 }  # the last message (preview "column" mode only)
 
