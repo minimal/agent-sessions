@@ -247,6 +247,7 @@ type model struct {
 	loader             *multiLoader
 	styles             styles
 	bgExec             bool              // run key-bound commands detached (no terminal takeover)
+	rexMode            bool              // --rex: map live rows to Rex blocks
 	enterBySource      map[string]string // per-source override of the "enter" command (key = Source)
 	tmuxGlyph          string            // marker for tmux-attachable sessions; "" hides it
 	tmuxBar            bool              // show the Tmux Bar row ([tmux] bar)
@@ -403,6 +404,7 @@ func newModel(cfg Config) model {
 		liveOnly:           liveOnly,
 		ageWindow:          ageWindow,
 		bgExec:             cfg.Background,
+		rexMode:            cfg.RexMode,
 		enterBySource:      enterBySource,
 		tmuxGlyph:          cfg.Tmux.Glyph,
 		tmuxBar:            cfg.Tmux.Bar,
@@ -1551,6 +1553,9 @@ func (m *model) applyFilter() {
 	// order; the default status bar then stays as it was.
 	if m.sortGroup != "" && !sameSortDims(parseSortDims(m.sortGroup), m.configuredSortDims) {
 		parts = append(parts, "sorted by "+m.sortGroup)
+	}
+	if m.rexMode {
+		parts = append(parts, "rex")
 	}
 	m.status = strings.Join(parts, ", ")
 	m.computeWidths()
