@@ -248,6 +248,7 @@ type model struct {
 	styles             styles
 	bgExec             bool              // run key-bound commands detached (no terminal takeover)
 	rexMode            bool              // --rex: map live rows to Rex blocks
+	rexBin             string            // the rex CLI, for {rex}; "" unless rexMode
 	enterBySource      map[string]string // per-source override of the "enter" command (key = Source)
 	tmuxGlyph          string            // marker for tmux-attachable sessions; "" hides it
 	tmuxBar            bool              // show the Tmux Bar row ([tmux] bar)
@@ -454,6 +455,14 @@ func newModel(cfg Config) model {
 	}
 	if liveWarn != "" {
 		warnings = append(warnings, liveWarn)
+	}
+	if cfg.RexMode {
+		if bin, ok := findRex(); ok {
+			m.rexBin = bin
+		} else {
+			m.rexMode = false
+			warnings = append(warnings, "rex CLI not found on PATH or in the Rex app; --rex is off")
+		}
 	}
 	if len(warnings) > 0 {
 		m.notice = strings.Join(warnings, " · ")
@@ -1249,6 +1258,13 @@ func (m model) runCommand(tmpl string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		vars["ci-build-url"] = u
+	}
+	if strings.Contains(tmpl, "{rex}") {
+		if m.rexBin == "" {
+			m.notice = "No rex CLI: run agent-sessions with --rex."
+			return m, nil
+		}
+		vars["rex"] = m.rexBin
 	}
 	delete(m.unread, s.ID) // acting on a session counts as reading it
 	return m.continueCommand(tmpl, vars)
@@ -2250,6 +2266,7 @@ func (m model) helpView() string {
 		"    {tmux-target} / {tmux-target?}   pane the Jump selects first; empty when none wants you",
 		"    {pid?} / {pane?} / {jobid?}   optional forms: expand empty instead of blocking",
 		"    {ci-build-url}      the latest CircleCI build's page (needs [circleci])",
+		"    {rex}               the rex CLI's path (needs --rex)",
 		"    {project-picker}    asks: pick a project from every known one",
 		"    {text-input:Label}  asks: a line of text (the label is optional)",
 		"",
