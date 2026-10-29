@@ -1216,6 +1216,14 @@ func commandVars(s Session) map[string]string {
 		"jobid":  s.JobID, // set when Background; "" otherwise
 		"jobid?": s.JobID,
 	}
+	// The Rex block's ids, set only for a live row in a Rex block.
+	var rex RexTarget
+	if s.Mux() == "rex" {
+		rex = s.Rex
+	}
+	for k, v := range map[string]string{"rex-session": rex.SessionID, "rex-window": rex.WindowID, "rex-block": rex.BlockID} {
+		vars[k], vars[k+"?"] = v, v
+	}
 	if s.Live() {
 		vars["pid?"] = strconv.Itoa(s.PID)
 		// Prefer the pane the adapter already resolved; otherwise -- e.g. a
@@ -1257,6 +1265,10 @@ func (m model) runCommand(tmpl string) (tea.Model, tea.Cmd) {
 	}
 	if strings.Contains(tmpl, "{jobid}") && !s.Background {
 		m.notice = "Session is not running as a background job."
+		return m, nil
+	}
+	if rexVarRe.MatchString(tmpl) && s.Mux() != "rex" {
+		m.notice = "Session is not running in a Rex block."
 		return m, nil
 	}
 	if strings.Contains(tmpl, "{ci-build-url}") {
@@ -2275,6 +2287,8 @@ func (m model) helpView() string {
 		"    {pid?} / {pane?} / {jobid?}   optional forms: expand empty instead of blocking",
 		"    {ci-build-url}      the latest CircleCI build's page (needs [circleci])",
 		"    {rex}               the rex CLI's path (needs --rex)",
+		"    {rex-session} / {rex-window} / {rex-block}   ids of the Rex block (live, in Rex)",
+		"    {rex-session?} / {rex-window?} / {rex-block?}   optional forms: expand empty instead of blocking",
 		"    {project-picker}    asks: pick a project from every known one",
 		"    {text-input:Label}  asks: a line of text (the label is optional)",
 		"",

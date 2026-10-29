@@ -415,6 +415,7 @@ survive word-splitting.
 | `{tmux-target}` | the pane that Jump selects first; empty when no agent wants you |
 | `{ci-build-url}` | the latest CircleCI build's page (needs `[circleci]`) |
 | `{rex}` | the path of the `rex` CLI (needs `--rex`); pass `--autostart=false`, and `-s`/`-b` inside Rex |
+| `{rex-session}` `{rex-window}` `{rex-block}` | the ids of the Rex block hosting a live session (`--rex`); `?` forms expand empty |
 | `{project-picker}` | interactive: the project chosen from a selection screen |
 | `{text-input}` | interactive: a line of text typed into the status bar |
 
