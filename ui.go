@@ -257,6 +257,7 @@ type model struct {
 	tmuxSrv            *tmuxServer       // last tmux poll; nil while no server is reachable
 	maxIcons           int               // agent glyphs per Tmux Chip before "+N"; 0 hides them
 	bgGlyph            string            // marker for detached `claude --background` sessions; "" hides it
+	rexGlyph           string            // marker for sessions in a Rex block; "" hides it
 	agentGlyphs        map[string]string // marker keyed by Session.Source
 	agentStyles        map[string]lipgloss.Style
 	colAgentGlyph      int    // display width reserved for the widest source glyph
@@ -425,6 +426,7 @@ func newModel(cfg Config) model {
 		tmuxJump:           cfg.Commands["tmux"],
 		maxIcons:           max(0, cfg.Tmux.MaxIcons),
 		bgGlyph:            cfg.Bg.Glyph,
+		rexGlyph:           cfg.Rex.Glyph,
 		agentGlyphs:        agentGlyphs,
 		agentStyles:        agentStyles,
 		colAgentGlyph:      agentGlyphWidth(agentGlyphs),
@@ -2677,20 +2679,22 @@ func (m model) statusCell(mk marker) string {
 }
 
 // tmuxCell is the fixed-width session-reachability marker slot: the glyph
-// for sessions attachable via a tmux pane, or — mutually exclusive, since a
-// live session is either sitting in a pane or running as an unattached
-// `claude --background` job, never both — the glyph for a background job,
-// blank otherwise. The wider of the two configured glyphs sets the slot's
-// width, so columns stay aligned whichever one shows. It is empty (no slot
-// at all) when both markers are disabled.
+// for sessions attachable via a tmux pane, or a Rex block, or — mutually
+// exclusive, since a live session is either sitting in a pane or running as
+// an unattached `claude --background` job, never both — the glyph for a
+// background job, blank otherwise. The widest of the configured glyphs sets
+// the slot's width, so columns stay aligned whichever one shows. It is empty
+// (no slot at all) when every marker is disabled.
 func (m model) tmuxCell(s Session) string {
-	w := max(lipgloss.Width(m.tmuxGlyph), lipgloss.Width(m.bgGlyph))
+	w := max(lipgloss.Width(m.tmuxGlyph), lipgloss.Width(m.rexGlyph), lipgloss.Width(m.bgGlyph))
 	if w == 0 {
 		return ""
 	}
 	switch {
 	case s.InTmux():
 		return "  " + pad(m.tmuxGlyph, w)
+	case s.Mux() == "rex":
+		return "  " + pad(m.rexGlyph, w)
 	case s.Background:
 		return "  " + pad(m.bgGlyph, w)
 	default:

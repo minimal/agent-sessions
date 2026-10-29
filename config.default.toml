@@ -276,6 +276,11 @@ key = "t"
 # with `claude attach` instead of `claude --resume`). Set to "" to hide it.
 glyph = "bg"
 
+[rex]
+# Marker shown next to live sessions running in a Rex block. Only set when
+# agent-sessions runs with --rex. Set to "" to hide it.
+glyph = "⊞"
+
 [mouse]
 # Off by default. When enabled the app captures mouse events, which means the
 # terminal (and tmux) hand ALL mouse input to the app: your terminal's own

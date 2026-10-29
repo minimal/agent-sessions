@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // fakeRex writes an executable named rex at path.
@@ -335,6 +336,71 @@ func TestRexRowsStayOffTheTmuxBar(t *testing.T) {
 		if len(c.Agents) != 0 {
 			t.Errorf("chip %q holds %+v; a Rex row is in no tmux session", c.Name, c.Agents)
 		}
+	}
+}
+
+func TestRexGlyphKeepsRowsAligned(t *testing.T) {
+	now := time.Now()
+	sessions := []Session{
+		{ID: "t", Title: "tmux", Modified: now, PID: 1, Pane: "%1"},
+		{ID: "r", Title: "rex", Modified: now, PID: 2, Rex: RexTarget{BlockID: "block:b"}},
+		{ID: "b", Title: "bg", Modified: now, PID: 3, Background: true},
+		{ID: "n", Title: "none", Modified: now},
+	}
+	m := testModel(previewColumn, sessions)
+	m.tmuxGlyph, m.rexGlyph, m.bgGlyph = "⊟", "rex", "bg"
+
+	want := map[string]string{"t": "⊟", "r": "rex", "b": "bg", "n": ""}
+	for _, s := range sessions {
+		cell := m.tmuxCell(s)
+		if got := strings.TrimSpace(cell); got != want[s.ID] {
+			t.Errorf("%s: cell = %q, want glyph %q", s.ID, cell, want[s.ID])
+		}
+		if w := lipgloss.Width(cell); w != 2+3 {
+			t.Errorf("%s: cell width = %d, want 5: the widest glyph sets the slot", s.ID, w)
+		}
+	}
+}
+
+func TestRexGlyphOnlyHidesItself(t *testing.T) {
+	s := Session{ID: "r", PID: 2, Rex: RexTarget{BlockID: "block:b"}}
+	m := testModel(previewColumn, []Session{s})
+	m.tmuxGlyph, m.rexGlyph, m.bgGlyph = "", "", ""
+	if got := m.tmuxCell(s); got != "" {
+		t.Errorf("all glyphs off: cell = %q, want no slot", got)
+	}
+	m.rexGlyph = "⊞"
+	if got := m.tmuxCell(s); got != "  ⊞" {
+		t.Errorf("only the rex glyph on: cell = %q, want it", got)
+	}
+}
+
+func TestRexGlyphDefaultsWhenTheUserFileLacksIt(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", "")
+	path, err := configPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("[tmux]\nglyph = \"T\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Tmux.Glyph != "T" {
+		t.Fatalf("tmux glyph = %q, the user file was not read", cfg.Tmux.Glyph)
+	}
+	var def Config
+	if _, err := toml.Decode(defaultConfigTOML, &def); err != nil {
+		t.Fatal(err)
+	}
+	if def.Rex.Glyph == "" || cfg.Rex.Glyph != def.Rex.Glyph {
+		t.Errorf("rex glyph = %q, want the default %q", cfg.Rex.Glyph, def.Rex.Glyph)
 	}
 }
 
