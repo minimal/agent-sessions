@@ -2,9 +2,23 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 )
+
+// TestMain keeps the command log of detached test commands out of the
+// user's state directory.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "agent-sessions-state")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("XDG_STATE_HOME", dir)
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
 
 func TestParseFlagsRexDefaultsOff(t *testing.T) {
 	opts, err := parseFlags(nil, &bytes.Buffer{})

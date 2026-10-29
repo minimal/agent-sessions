@@ -103,6 +103,7 @@ type Config struct {
 	} `toml:"bg"`
 	Rex struct {
 		Glyph string `toml:"glyph"` // marker on live sessions in a Rex block (--rex); "" hides it
+		Enter string `toml:"enter"` // Enter on a live session in a Rex block; "" uses [commands] enter
 	} `toml:"rex"`
 	Mouse struct {
 		Enabled     bool   `toml:"enabled"`      // capture mouse events at all

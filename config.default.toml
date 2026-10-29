@@ -280,6 +280,15 @@ glyph = "bg"
 # Marker shown next to live sessions running in a Rex block. Only set when
 # agent-sessions runs with --rex. Set to "" to hide it.
 glyph = "⊞"
+# Enter on a live session in a Rex block: focus the block, show its session
+# and tab in the Rex app, then bring the app to the front. It always runs
+# detached, as it only drives the app. Rows not in a Rex block use the
+# [commands] enter. Set to "" to use the [commands] enter for every row.
+enter = '''
+{rex} --autostart=false focus -s {rex-session} {rex-block} &&
+{rex} --autostart=false do session.select session_id={rex-session} window_id={rex-window} &&
+open -a "Rex Beta"
+'''
 
 [mouse]
 # Off by default. When enabled the app captures mouse events, which means the
