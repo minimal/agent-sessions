@@ -46,6 +46,7 @@ type Session struct {
 	State      SessionState // empty unless Live
 	PID        int          // the running agent process; 0 unless Live
 	Pane       string       // session:window.pane hosting the process, if any
+	Rex        RexTarget    // the Rex block hosting the process; zero unless found by --rex
 	Background bool         // true if Live and running detached (claude --background), no pane to jump to
 	JobID      string       // short id `claude attach`/`claude stop` takes; set when Background
 	Worktree   bool         // true if CWD is a linked git worktree (not the main repo)
@@ -73,6 +74,26 @@ func (s Session) Live() bool {
 // be a shell or a different session's.
 func (s Session) InTmux() bool {
 	return s.Pane != "" && s.Live()
+}
+
+// Mux names what hosts the running process: "tmux", "rex", or "" for none.
+// Pane stays tmux only; a Rex row has an empty Pane, so tmux paths skip it.
+func (s Session) Mux() string {
+	switch {
+	case s.InTmux():
+		return "tmux"
+	case s.Live() && s.Rex.BlockID != "":
+		return "rex"
+	}
+	return ""
+}
+
+// PaneName is the pane column: the tmux pane, else the Rex block.
+func (s Session) PaneName() string {
+	if s.Pane == "" && s.Rex.BlockID != "" {
+		return s.Rex.Name()
+	}
+	return s.Pane
 }
 
 // Project returns a short display name for the session's working directory.
@@ -128,9 +149,10 @@ func (s Session) Dir() string {
 
 // matches reports whether the lowercase query appears in any of the
 // session's searchable fields (including Source, so "/pi" or "/claude"
-// filters by adapter, and Pane, so a pane id narrows to sessions in it).
+// filters by adapter, and PaneName, so a pane id or Rex session label narrows
+// to sessions in it).
 func (s Session) matches(q string) bool {
-	for _, f := range []string{s.Subject(), s.Project(), s.Branch, s.Model, s.ID, s.CWD, s.Pane, s.Source} {
+	for _, f := range []string{s.Subject(), s.Project(), s.Branch, s.Model, s.ID, s.CWD, s.PaneName(), s.Source} {
 		if strings.Contains(strings.ToLower(f), q) {
 			return true
 		}

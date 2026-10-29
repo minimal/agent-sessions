@@ -357,9 +357,20 @@ func newModel(cfg Config) model {
 			selStatusFg[mk] = lipgloss.Color(c)
 		}
 	}
+	var rexBin, rexWarn string
+	if cfg.RexMode {
+		var ok bool
+		if rexBin, ok = findRex(); !ok {
+			rexWarn = "rex CLI not found on PATH or in the Rex app; --rex is off"
+		}
+	}
 	var adapters []Adapter
 	if cfg.Sources.Claude.Enabled {
-		adapters = append(adapters, newClaudeAdapter())
+		claude := newClaudeAdapter()
+		if rexBin != "" {
+			claude.rexPoll = rexCLI{path: rexBin}.poll
+		}
+		adapters = append(adapters, claude)
 	}
 	if cfg.Sources.Pi.Enabled {
 		adapters = append(adapters, newPiAdapter(cfg.Sources.Pi.SessionDir))
@@ -405,7 +416,8 @@ func newModel(cfg Config) model {
 		liveOnly:           liveOnly,
 		ageWindow:          ageWindow,
 		bgExec:             cfg.Background,
-		rexMode:            cfg.RexMode,
+		rexMode:            rexBin != "",
+		rexBin:             rexBin,
 		enterBySource:      enterBySource,
 		tmuxGlyph:          cfg.Tmux.Glyph,
 		tmuxBar:            cfg.Tmux.Bar,
@@ -456,13 +468,8 @@ func newModel(cfg Config) model {
 	if liveWarn != "" {
 		warnings = append(warnings, liveWarn)
 	}
-	if cfg.RexMode {
-		if bin, ok := findRex(); ok {
-			m.rexBin = bin
-		} else {
-			m.rexMode = false
-			warnings = append(warnings, "rex CLI not found on PATH or in the Rex app; --rex is off")
-		}
+	if rexWarn != "" {
+		warnings = append(warnings, rexWarn)
 	}
 	if len(warnings) > 0 {
 		m.notice = strings.Join(warnings, " · ")
@@ -759,12 +766,12 @@ func (m *model) observedModelWidth() int {
 	return w
 }
 
-// observedPaneWidth returns the widest tmux pane name across the visible
-// sessions. An empty pane (session not in tmux) contributes 0.
+// observedPaneWidth returns the widest pane name (tmux pane or Rex block)
+// across the visible sessions. A session in neither contributes 0.
 func (m *model) observedPaneWidth() int {
 	var w int
 	for _, s := range m.sessions {
-		if wp := lipgloss.Width(s.Pane); wp > w {
+		if wp := lipgloss.Width(s.PaneName()); wp > w {
 			w = wp
 		}
 	}
@@ -1215,10 +1222,11 @@ func commandVars(s Session) map[string]string {
 		// fresh lookup handles a pane move since Live() ran -- walk the process
 		// tree to the pane hosting it. Skipped for a background job: it has no
 		// pane of its own, and the walk would just resolve to whatever pane
-		// happened to launch it.
+		// happened to launch it. Skipped for a Rex row too: its block is known,
+		// and it is in no tmux pane.
 		if pane := s.Pane; pane != "" {
 			vars["pane"], vars["pane?"] = pane, pane
-		} else if !s.Background {
+		} else if !s.Background && s.Mux() != "rex" {
 			if pane, ok := tmuxPaneFor(s.PID); ok {
 				vars["pane"], vars["pane?"] = pane, pane
 			}
@@ -2420,7 +2428,7 @@ func (m model) renderRow(idx int, colored bool, sel lipgloss.Style, fill bool) s
 
 	// pane column.
 	if m.widths.pane > 0 {
-		emit(seg(lipgloss.NewStyle(), truncPad(s.Pane, m.widths.pane)))
+		emit(seg(lipgloss.NewStyle(), truncPad(s.PaneName(), m.widths.pane)))
 	}
 
 	// ci column (gated by the CircleCI token, not by a column bound).

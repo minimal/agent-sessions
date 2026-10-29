@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	_ "embed"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -67,6 +70,78 @@ func (r rexCLI) run(stdin string, args ...string) ([]byte, error) {
 	cmd := r.command(ctx, args...)
 	cmd.Stdin = strings.NewReader(stdin)
 	return cmd.Output()
+}
+
+// rexPollLua lists every terminal block in one rex call.
+//
+//go:embed rex_poll.lua
+var rexPollLua string
+
+// RexTarget names the Rex block hosting a live session.
+type RexTarget struct {
+	SessionID string `json:"session_id"`
+	WindowID  string `json:"window_id"`
+	BlockID   string `json:"block_id"`
+	Label     string `json:"label"` // the Rex session's label
+}
+
+// Name is the display form, label:shortid. Block ids are too long to show.
+func (r RexTarget) Name() string {
+	short := r.BlockID
+	if len(short) > 8 {
+		short = short[len(short)-8:]
+	}
+	return r.Label + ":" + short
+}
+
+// rexBlock is one terminal block from a poll.
+type rexBlock struct {
+	RexTarget
+	FG    int `json:"fg"`    // the foreground process; a Claude registry pid matches it
+	Child int `json:"child"` // the block's own process, often the shell
+}
+
+// poll lists every terminal block. Any error gives none: Rex rows then show
+// as live rows with no mux.
+func (r rexCLI) poll() []rexBlock {
+	out, err := r.run(rexPollLua, "do", "-", "--json")
+	if err != nil {
+		return nil
+	}
+	return parseRexPoll(out)
+}
+
+// parseRexPoll reads a poll result. Lua writes an empty table as {}, which
+// fails to decode as an array and so also gives none.
+func parseRexPoll(data []byte) []rexBlock {
+	var blocks []rexBlock
+	if err := json.Unmarshal(data, &blocks); err != nil {
+		return nil
+	}
+	return slices.DeleteFunc(blocks, func(b rexBlock) bool { return b.BlockID == "" })
+}
+
+// rexBlockFor finds the block that pid runs in. The foreground pid usually
+// matches. Otherwise walk pid's ancestors to a block's foreground or child,
+// for an agent started under a wrapper.
+func rexBlockFor(blocks []rexBlock, pid int) (rexBlock, bool) {
+	byPID := map[int]rexBlock{}
+	for _, b := range blocks {
+		if b.Child != 0 {
+			byPID[b.Child] = b
+		}
+	}
+	for _, b := range blocks {
+		if b.FG != 0 {
+			byPID[b.FG] = b // a foreground pid wins over another block's child
+		}
+	}
+	for p := pid; p > 1; p = parentPID(p) {
+		if b, ok := byPID[p]; ok {
+			return b, true
+		}
+	}
+	return rexBlock{}, false
 }
 
 func hasAnyPrefix(s string, prefixes []string) bool {
