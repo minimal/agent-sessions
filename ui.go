@@ -1196,7 +1196,7 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	m.cursor = si
 	m.lastClickRow, m.lastClickAt = si, now
 	m.clampOffset()
-	if (m.commands["enter"] != "" || m.rexEnter != "") && (m.switchOnClick || doubleClick) {
+	if (m.commands["enter"] != "" || m.rexEnterFor(m.sessions[si])) && (m.switchOnClick || doubleClick) {
 		m.lastClickRow = -1 // consumed; don't let a third click re-switch
 		return m.runEnter()
 	}
@@ -1267,8 +1267,8 @@ func (m model) runCommand(tmpl string) (tea.Model, tea.Cmd) {
 // takeover would just flash the screen. Every other row runs the "enter"
 // command.
 func (m model) runEnter() (tea.Model, tea.Cmd) {
-	if m.cursor < len(m.sessions) && m.rexEnter != "" && m.rexMode() {
-		if s := m.sessions[m.cursor]; s.Mux() == "rex" {
+	if m.cursor < len(m.sessions) {
+		if s := m.sessions[m.cursor]; m.rexEnterFor(s) {
 			return m.runTemplate(s, m.rexEnter, true)
 		}
 	}
@@ -1276,6 +1276,11 @@ func (m model) runEnter() (tea.Model, tea.Cmd) {
 		return m.runCommand(tmpl)
 	}
 	return m, nil
+}
+
+// rexEnterFor reports whether Enter on s runs [rex] enter.
+func (m model) rexEnterFor(s Session) bool {
+	return m.rexMode() && m.rexEnter != "" && s.Mux() == "rex"
 }
 
 // runTemplate fills the placeholders of tmpl for s and runs it; bg runs it
@@ -2318,8 +2323,10 @@ func (m model) helpView() string {
 		"    {pid?} / {pane?} / {jobid?}   optional forms: expand empty instead of blocking",
 		"    {ci-build-url}      the latest CircleCI build's page (needs [circleci])",
 		"    {rex}               the rex CLI's path (needs --rex)",
-		"    {rex-session} / {rex-window} / {rex-block}   ids of the Rex block (live, in Rex)",
-		"    {rex-session?} / {rex-window?} / {rex-block?}   optional forms: expand empty instead of blocking",
+		"    {rex-session}       Rex session of the block hosting the process (live, --rex)",
+		"    {rex-window}        Rex window (tab) of that block",
+		"    {rex-block}         that Rex block",
+		"    {rex-…?}            optional forms of the three: expand empty instead of blocking",
 		"    {project-picker}    asks: pick a project from every known one",
 		"    {text-input:Label}  asks: a line of text (the label is optional)",
 		"",
