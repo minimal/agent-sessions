@@ -414,7 +414,7 @@ survive word-splitting.
 | `{tmux-session}` | the tmux session id (`$N`) a chip's Jump switches to |
 | `{tmux-target}` | the pane that Jump selects first; empty when no agent wants you |
 | `{ci-build-url}` | the latest CircleCI build's page (needs `[circleci]`) |
-| `{rex}` | the path of the `rex` CLI (needs `--rex`); pass `--autostart=false` |
+| `{rex}` | the path of the `rex` CLI (needs `--rex`); pass `--autostart=false`, and `-s`/`-b` inside Rex |
 | `{project-picker}` | interactive: the project chosen from a selection screen |
 | `{text-input}` | interactive: a line of text typed into the status bar |
 
