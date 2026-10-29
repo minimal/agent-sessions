@@ -1234,7 +1234,7 @@ func TestTmuxJumpToADeadSessionNotices(t *testing.T) {
 		t.Fatalf("the Jump to a missing session should fail, got %#v", done)
 	}
 	mm, _ := m.Update(done)
-	if notice := mm.(model).notice; !strings.Contains(notice, "command:") {
+	if notice := mm.(model).notice; !strings.Contains(notice, "command failed:") {
 		t.Errorf("a failed Jump should notice instead of crashing, got %q", notice)
 	}
 }

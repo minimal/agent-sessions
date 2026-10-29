@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -39,16 +40,44 @@ func execCmd(tmpl string, vars map[string]string, bg bool) tea.Cmd {
 	if bg {
 		return func() tea.Msg {
 			return execDoneMsg{withCommandLog(line, func(logf *os.File) error {
-				cmd := exec.Command("sh", "-c", line)
+				var tail tailBuffer
+				out := io.Writer(&tail)
 				if logf != nil {
-					cmd.Stdout, cmd.Stderr = logf, logf
+					out = io.MultiWriter(logf, &tail)
 				}
-				return cmd.Run()
+				cmd := exec.Command("sh", "-c", line)
+				cmd.Stdout, cmd.Stderr = out, out
+				err := cmd.Run()
+				if last := tail.lastLine(); err != nil && last != "" {
+					// A detached command shows nothing, so its last words are the
+					// reason, e.g. rex's "Turn on Remote Control".
+					err = fmt.Errorf("%s (%w)", last, err)
+				}
+				return err
 			})}
 		}
 	}
 	return tea.Exec(&loggedCommand{line: line},
 		func(err error) tea.Msg { return execDoneMsg{err} })
+}
+
+// tailBuffer keeps the last tailBytes of what is written to it.
+type tailBuffer struct{ b []byte }
+
+const tailBytes = 4096
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.b = append(t.b, p...)
+	if len(t.b) > tailBytes {
+		t.b = t.b[len(t.b)-tailBytes:]
+	}
+	return len(p), nil
+}
+
+// lastLine returns the last non-blank line written, trimmed.
+func (t *tailBuffer) lastLine() string {
+	lines := strings.Split(strings.TrimSpace(string(t.b)), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
 }
 
 // withCommandLog runs one command, framed in the command log by its line and
