@@ -55,6 +55,13 @@ Live sessions running inside a tmux pane — the ones the default `Enter`
 command can jump to — are additionally marked with a `⊟` glyph (configurable
 via `[tmux]`), so you can see which are attachable without pressing `Enter`.
 
+Run with `--rex` to also find live Claude sessions in [Rex](https://www.superlogical.com/rex)
+blocks, e.g. from a quick terminal outside Rex. Each refresh makes one
+read-only `rex do` call. It never starts a Rex server. Rows in a Rex block
+get a `⊞` glyph (`[rex]`), and the pane column shows the block as
+`label:shortid`. `rex` is found on `PATH`, else in the Rex app bundle.
+`Enter` does not jump to a Rex block yet.
+
 State comes from `~/.claude/sessions/<pid>.json`, a registry each running
 Claude Code instance maintains (status `busy`/`waiting`/`idle` plus the exact
 session id). Registry files left behind by crashed processes are ignored by
@@ -407,6 +414,7 @@ survive word-splitting.
 | `{tmux-session}` | the tmux session id (`$N`) a chip's Jump switches to |
 | `{tmux-target}` | the pane that Jump selects first; empty when no agent wants you |
 | `{ci-build-url}` | the latest CircleCI build's page (needs `[circleci]`) |
+| `{rex}` | the path of the `rex` CLI (needs `--rex`); pass `--autostart=false` |
 | `{project-picker}` | interactive: the project chosen from a selection screen |
 | `{text-input}` | interactive: a line of text typed into the status bar |
 
