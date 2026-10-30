@@ -62,8 +62,14 @@ get a `⊞` glyph (`[rex]`), and the pane column shows the block as
 `label:shortid`. `rex` is found on `PATH`, else in the Rex app bundle.
 `Enter` on such a row runs `[rex] enter`: it focuses the block, shows its
 session and tab in the Rex app, and brings the app to the front. It runs
-detached, and needs Remote Control on in the Rex app's settings. Other rows
-keep the `[commands]` `enter`.
+detached, and needs Remote Control on in the Rex app's settings.
+`Enter` on an offline Claude row runs `[rex] resume`: it opens a tab in the
+Rex session that already has a block in the row's repo (any worktree), else
+in a new Rex session named after the repo, and types `claude --resume` into
+it. `c` runs `[rex] new`, the same for a picked project and a new prompt
+(`[rex] new_key`, which wins over `[commands]` `c` in Rex mode). These need
+`jq` on `PATH`. Other rows keep the
+`[commands]` `enter`.
 
 State comes from `~/.claude/sessions/<pid>.json`, a registry each running
 Claude Code instance maintains (status `busy`/`waiting`/`idle` plus the exact
@@ -419,6 +425,8 @@ survive word-splitting.
 | `{ci-build-url}` | the latest CircleCI build's page (needs `[circleci]`) |
 | `{rex}` | the path of the `rex` CLI (needs `--rex`); pass `--autostart=false`, and `-s`/`-b` inside Rex |
 | `{rex-session}` `{rex-window}` `{rex-block}` | the ids of the Rex block hosting a live session (`--rex`); `?` forms expand empty |
+| `{repo-name}` | the name of the command's git repo: the picked project's, else the session's; worktrees share it |
+| `{rex-repo-session?}` | the Rex session with a block in that repo (`--rex`), found when the command runs; empty when none |
 | `{project-picker}` | interactive: the project chosen from a selection screen |
 | `{text-input}` | interactive: a line of text typed into the status bar |
 

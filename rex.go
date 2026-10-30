@@ -98,8 +98,9 @@ func (r RexTarget) Name() string {
 // rexBlock is one terminal block from a poll.
 type rexBlock struct {
 	RexTarget
-	FG    int `json:"fg"`    // the foreground process; a Claude registry pid matches it
-	Child int `json:"child"` // the block's own process, often the shell
+	FG    int    `json:"fg"`    // the foreground process; a Claude registry pid matches it
+	Child int    `json:"child"` // the block's own process, often the shell
+	CWD   string `json:"cwd"`   // the foreground process's cwd
 }
 
 // poll lists every terminal block. Any error gives none: Rex rows then show
@@ -143,6 +144,28 @@ func rexBlockFor(blocks []rexBlock, pid int) (rexBlock, bool) {
 		}
 	}
 	return rexBlock{}, false
+}
+
+// rexRepoSession returns the Rex session with a block in dir's repo, for a
+// new tab there. A block in dir itself wins, then the first block in the same
+// repo. Outside a repo only dir itself matches. "" when none.
+func rexRepoSession(blocks []rexBlock, dir string) string {
+	dir = filepath.Clean(dir)
+	repos := map[string]string{}
+	repo := repoKeyCached(dir, repos)
+	match := ""
+	for _, b := range blocks {
+		if b.CWD == "" {
+			continue
+		}
+		if filepath.Clean(b.CWD) == dir {
+			return b.SessionID
+		}
+		if match == "" && repo != "" && repoKeyCached(b.CWD, repos) == repo {
+			match = b.SessionID
+		}
+	}
+	return match
 }
 
 // hasAnyPrefix reports whether s starts with one of prefixes.

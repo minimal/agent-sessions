@@ -282,8 +282,9 @@ glyph = "bg"
 glyph = "⊞"
 # Enter on a live session in a Rex block: focus the block, show its session
 # and tab in the Rex app, then bring the app to the front. It always runs
-# detached, as it only drives the app. Rows not in a Rex block use the
-# [commands] enter. Set to "" to use the [commands] enter for every row.
+# detached, as it only drives the app. Offline Claude rows use resume
+# below; other rows use the [commands] enter. Set to "" to use the
+# [commands] enter for live rows in a Rex block.
 # "Rex Beta" is the app's name in /Applications; change it if yours differs.
 #
 # In the Ghostty quick terminal, the osascript step hides the quick terminal
@@ -309,6 +310,82 @@ EOF
 fi
 open -a "Rex Beta"
 '''
+
+# Enter on an offline Claude session: resume it in a new tab of the Rex
+# session that has a block in the session's repo (any of its worktrees; a
+# block in the session's own directory wins). With no such session, start a
+# new Rex session named after the repo. Then show the tab and bring the app
+# to the front, as enter does. The tab starts an interactive shell, so your
+# rc files apply, and the claude command is typed into it. It always runs
+# detached, and needs jq on PATH. Set to "" to use the [commands] enter.
+resume = '''
+command -v jq >/dev/null || { echo "jq not found"; exit 1; }
+if [ -n {rex-repo-session?} ]; then
+    s={rex-repo-session?}
+    t=$({rex} --autostart=false window new -s "$s" -c {cwd} --json) || exit
+else
+    t=$({rex} --autostart=false new {repo-name} -c {cwd} --json) || exit
+    s=$(printf '%s' "$t" | jq -r .session_id)
+    t=$(printf '%s' "$t" | jq -c '.initial_windows[0]')
+fi
+w=$(printf '%s' "$t" | jq -r .window_id)
+b=$(printf '%s' "$t" | jq -r '.block_ids[0]')
+{rex} --autostart=false send -s "$s" -b "$b" "claude --resume {id}" &&
+{rex} --autostart=false send-key -s "$s" -b "$b" enter &&
+{rex} --autostart=false do session.select session_id="$s" window_id="$w" || exit
+if [ "$TERM_PROGRAM" = ghostty ]; then
+    osascript - "/dev/$(ps -o tty= -p $PPID | tr -d ' ')" <<'EOF' 2>/dev/null
+on run {t}
+  if application "Ghostty" is not running then return
+  tell application "Ghostty"
+    repeat with w in windows
+      if (count of (terminals of w whose tty is t)) > 0 then return
+    end repeat
+    perform action "toggle_quick_terminal" on (first terminal whose tty is t)
+  end tell
+end run
+EOF
+fi
+open -a "Rex Beta"
+'''
+
+# A new agent in a Rex tab: pick a project, type the first prompt. The tab
+# opens in the Rex session for the picked project's repo, as resume does.
+# The prompt is typed in single quotes, so $ and ` in it stay as text.
+# new_key runs it, and wins over the same key in [commands]. Set new_key to
+# "" to keep the [commands] binding.
+new = '''
+command -v jq >/dev/null || { echo "jq not found"; exit 1; }
+q=$(printf '%s' {text-input:Prompt} | sed "s/'/'\\\\''/g")
+if [ -n {rex-repo-session?} ]; then
+    s={rex-repo-session?}
+    t=$({rex} --autostart=false window new -s "$s" -c {project-picker} --json) || exit
+else
+    t=$({rex} --autostart=false new {repo-name} -c {project-picker} --json) || exit
+    s=$(printf '%s' "$t" | jq -r .session_id)
+    t=$(printf '%s' "$t" | jq -c '.initial_windows[0]')
+fi
+w=$(printf '%s' "$t" | jq -r .window_id)
+b=$(printf '%s' "$t" | jq -r '.block_ids[0]')
+{rex} --autostart=false send -s "$s" -b "$b" "claude '$q'" &&
+{rex} --autostart=false send-key -s "$s" -b "$b" enter &&
+{rex} --autostart=false do session.select session_id="$s" window_id="$w" || exit
+if [ "$TERM_PROGRAM" = ghostty ]; then
+    osascript - "/dev/$(ps -o tty= -p $PPID | tr -d ' ')" <<'EOF' 2>/dev/null
+on run {t}
+  if application "Ghostty" is not running then return
+  tell application "Ghostty"
+    repeat with w in windows
+      if (count of (terminals of w whose tty is t)) > 0 then return
+    end repeat
+    perform action "toggle_quick_terminal" on (first terminal whose tty is t)
+  end tell
+end run
+EOF
+fi
+open -a "Rex Beta"
+'''
+new_key = "c"
 
 [mouse]
 # Off by default. When enabled the app captures mouse events, which means the
@@ -353,6 +430,12 @@ click_action = "select"
 # {rex-session}, {rex-window} and {rex-block} are the ids of the Rex block
 # hosting a live session. A command using them runs only on such a row; the
 # ? forms ({rex-block?}, ...) expand empty on other rows instead.
+#
+# {repo-name} names the command's git repo: the picked project's when the
+# command has {project-picker}, else the session's. All worktrees of a repo
+# share the main worktree's name. {rex-repo-session?} is the Rex session
+# with a block in that repo (--rex), found when the command runs. It is
+# empty when there is none, so it has only the ? form.
 #
 # More examples:
 #   o = "cd {cwd} && $EDITOR ."
