@@ -249,6 +249,10 @@ type model struct {
 	bgExec             bool              // run key-bound commands detached (no terminal takeover)
 	rexBin             string            // the rex CLI, for {rex}; "" unless --rex found it
 	rexEnter           string            // [rex] enter: Enter on a live row in a Rex block
+	rexResume          string            // [rex] resume: Enter on an offline Claude row
+	rexNew             string            // [rex] new: a new agent in a Rex tab
+	rexNewKey          string            // runs [rex] new; "" unbinds it
+	rexPoll            func() []rexBlock // lists Rex blocks, for {rex-repo-session?}; nil unless --rex
 	enterBySource      map[string]string // per-source override of the "enter" command (key = Source)
 	tmuxGlyph          string            // marker for tmux-attachable sessions; "" hides it
 	tmuxBar            bool              // show the Tmux Bar row ([tmux] bar)
@@ -419,6 +423,9 @@ func newModel(cfg Config) model {
 		bgExec:             cfg.Background,
 		rexBin:             rexBin,
 		rexEnter:           cfg.Rex.Enter,
+		rexResume:          cfg.Rex.Resume,
+		rexNew:             cfg.Rex.New,
+		rexNewKey:          cfg.Rex.NewKey,
 		enterBySource:      enterBySource,
 		tmuxGlyph:          cfg.Tmux.Glyph,
 		tmuxBar:            cfg.Tmux.Bar,
@@ -461,6 +468,9 @@ func newModel(cfg Config) model {
 		switchOnClick:      cfg.Mouse.ClickAction == "select-switch",
 		lastClickRow:       -1,
 		loading:            true,
+	}
+	if rexBin != "" {
+		m.rexPoll = rexCLI{path: rexBin}.poll
 	}
 	// Startup warnings, cleared by the next keypress.
 	var warnings []string
@@ -1035,6 +1045,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "enter" {
 			return m.runEnter()
 		}
+		if m.rexMode() && m.rexNew != "" && msg.String() == m.rexNewKey && m.cursor < len(m.sessions) {
+			return m.runTemplate(m.sessions[m.cursor], m.rexNew, true) // only drives the app: detached
+		}
 		if tmpl := m.commands[msg.String()]; tmpl != "" {
 			return m.runCommand(tmpl)
 		}
@@ -1196,7 +1209,7 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	m.cursor = si
 	m.lastClickRow, m.lastClickAt = si, now
 	m.clampOffset()
-	if (m.commands["enter"] != "" || m.rexEnterFor(m.sessions[si])) && (m.switchOnClick || doubleClick) {
+	if (m.commands["enter"] != "" || m.rexEnterFor(m.sessions[si]) != "") && (m.switchOnClick || doubleClick) {
 		m.lastClickRow = -1 // consumed; don't let a third click re-switch
 		return m.runEnter()
 	}
@@ -1262,14 +1275,15 @@ func (m model) runCommand(tmpl string) (tea.Model, tea.Cmd) {
 	return m.runTemplate(s, sourceEnterTemplate(s.Source, tmpl, m.enterBySource), m.bgExec)
 }
 
-// runEnter runs Enter on the selected session. A live row in a Rex block
-// runs [rex] enter, detached: it only drives the Rex app, so a terminal
-// takeover would just flash the screen. Every other row runs the "enter"
-// command.
+// runEnter runs Enter on the selected session. In Rex mode a live row in a
+// Rex block runs [rex] enter and an offline Claude row runs [rex] resume,
+// detached: they only drive the Rex app, so a terminal takeover would just
+// flash the screen. Every other row runs the "enter" command.
 func (m model) runEnter() (tea.Model, tea.Cmd) {
 	if m.cursor < len(m.sessions) {
-		if s := m.sessions[m.cursor]; m.rexEnterFor(s) {
-			return m.runTemplate(s, m.rexEnter, true)
+		s := m.sessions[m.cursor]
+		if tmpl := m.rexEnterFor(s); tmpl != "" {
+			return m.runTemplate(s, tmpl, true)
 		}
 	}
 	if tmpl := m.commands["enter"]; tmpl != "" {
@@ -1278,9 +1292,20 @@ func (m model) runEnter() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// rexEnterFor reports whether Enter on s runs [rex] enter.
-func (m model) rexEnterFor(s Session) bool {
-	return m.rexMode() && m.rexEnter != "" && s.Mux() == "rex"
+// rexEnterFor returns the Rex template Enter runs on s: [rex] enter for a
+// live row in a Rex block, [rex] resume for an offline Claude row. "" means
+// the "enter" command. Resume is Claude only: pi and Copilot resume with
+// their own commands.
+func (m model) rexEnterFor(s Session) string {
+	switch {
+	case !m.rexMode():
+		return ""
+	case s.Mux() == "rex":
+		return m.rexEnter
+	case !s.Live() && s.Source == "claude":
+		return m.rexResume
+	}
+	return ""
 }
 
 // runTemplate fills the placeholders of tmpl for s and runs it; bg runs it
@@ -1343,8 +1368,41 @@ func (m model) continueCommand(tmpl string, vars map[string]string, bg bool) (te
 		m.input = newLineInput()
 		return m, nil
 	}
-	m.cursorHidden = true // hide the highlight until the next key or focus
+	if strings.Contains(tmpl, "{repo-name}") || strings.Contains(tmpl, "{rex-repo-session?}") {
+		// The command's repo: the picked project's, else the row's.
+		dir := vars["cwd"]
+		if strings.Contains(tmpl, "{project-picker}") {
+			dir = vars["project-picker"]
+		}
+		if dir == "" {
+			m.notice = "Session has no working directory."
+			return m, nil
+		}
+		m.cursorHidden = true // hide the highlight until the next key or focus
+		return m, m.execWithRepoVars(tmpl, vars, bg, dir)
+	}
+	m.cursorHidden = true
 	return m, execCmd(tmpl, vars, bg)
+}
+
+// execWithRepoVars runs a template with {repo-name} and {rex-repo-session?}
+// set for the repo of dir. {rex-repo-session?} needs a Rex poll, so a
+// detached command polls in the background. Without --rex it is empty.
+func (m model) execWithRepoVars(tmpl string, vars map[string]string, bg bool, dir string) tea.Cmd {
+	vars["repo-name"] = repoName(dir)
+	vars["rex-repo-session?"] = ""
+	poll := m.rexPoll
+	if poll == nil || !strings.Contains(tmpl, "{rex-repo-session?}") {
+		return execCmd(tmpl, vars, bg)
+	}
+	if !bg {
+		vars["rex-repo-session?"] = rexRepoSession(poll(), dir)
+		return execCmd(tmpl, vars, bg)
+	}
+	return func() tea.Msg {
+		vars["rex-repo-session?"] = rexRepoSession(poll(), dir)
+		return execCmd(tmpl, vars, bg)()
+	}
 }
 
 // projectList returns every known project cwd, most recently used first.
@@ -2270,6 +2328,14 @@ func (m model) helpView() string {
 		lines = append(lines, fmt.Sprintf(
 			"    %-18s what Enter runs on a live row in a Rex block", "[rex] enter"))
 	}
+	if m.rexMode() && m.rexResume != "" {
+		lines = append(lines, fmt.Sprintf(
+			"    %-18s what Enter runs on an offline Claude row", "[rex] resume"))
+	}
+	if m.rexMode() && m.rexNew != "" && m.rexNewKey != "" {
+		lines = append(lines, fmt.Sprintf(
+			"    %-18s new agent in a Rex tab ([rex] new)", m.rexNewKey))
+	}
 	lines = append(lines,
 		"    d                  move session to Trash (large sessions: type yes)",
 		mouseHelp,
@@ -2327,6 +2393,8 @@ func (m model) helpView() string {
 		"    {rex-window}        Rex window (tab) of that block",
 		"    {rex-block}         that Rex block",
 		"    {rex-…?}            optional forms of the three: expand empty instead of blocking",
+		"    {repo-name}         name of the command's repo: the picked project's, else the row's",
+		"    {rex-repo-session?} Rex session with a block in that repo; empty when none (--rex)",
 		"    {project-picker}    asks: pick a project from every known one",
 		"    {text-input:Label}  asks: a line of text (the label is optional)",
 		"",
@@ -2336,6 +2404,9 @@ func (m model) helpView() string {
 	for k, tmpl := range m.commands {
 		if tmpl == "" || k == "tmux" {
 			continue // "" unbinds the binding; tmux is the Jump template, named above
+		}
+		if m.rexMode() && m.rexNew != "" && k == m.rexNewKey {
+			continue // [rex] new wins over this binding, named above
 		}
 		keys = append(keys, k)
 	}

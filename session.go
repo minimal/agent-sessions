@@ -401,6 +401,19 @@ func repoKey(cwd string) string {
 	}
 }
 
+// repoName names dir's git repo: the main worktree's directory, which all its
+// worktrees share. Outside a repo it is dir's own name.
+func repoName(dir string) string {
+	key := repoKey(dir)
+	switch {
+	case key == "":
+		return filepath.Base(dir)
+	case filepath.Base(key) == ".git":
+		return filepath.Base(filepath.Dir(key))
+	}
+	return strings.TrimSuffix(filepath.Base(key), ".git") // a bare repo
+}
+
 // commonGitDir follows a ".git" file (as used by linked worktrees) to the
 // repository's shared common dir, so sibling worktrees resolve to one key.
 func commonGitDir(base, gitFile string) string {

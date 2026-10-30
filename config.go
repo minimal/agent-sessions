@@ -102,8 +102,11 @@ type Config struct {
 		Glyph string `toml:"glyph"` // marker on sessions running as a detached `claude --background` job; "" hides it
 	} `toml:"bg"`
 	Rex struct {
-		Glyph string `toml:"glyph"` // marker on live sessions in a Rex block (--rex); "" hides it
-		Enter string `toml:"enter"` // Enter on a live session in a Rex block; "" uses [commands] enter
+		Glyph  string `toml:"glyph"`   // marker on live sessions in a Rex block (--rex); "" hides it
+		Enter  string `toml:"enter"`   // Enter on a live session in a Rex block; "" uses [commands] enter
+		Resume string `toml:"resume"`  // Enter on an offline Claude session (--rex); "" uses [commands] enter
+		New    string `toml:"new"`     // new agent in a Rex tab (--rex), run by NewKey
+		NewKey string `toml:"new_key"` // runs New; "" unbinds it
 	} `toml:"rex"`
 	Mouse struct {
 		Enabled     bool   `toml:"enabled"`      // capture mouse events at all

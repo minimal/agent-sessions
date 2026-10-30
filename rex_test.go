@@ -158,7 +158,7 @@ const rexPollFixture = `[
    "window_id": "window:01a184b5-b73c-745d-95b4-8375899633ac"},
   {"block_id": "block:01a184d4-c3b3-76ce-80d4-90bc3a20686a", "child": 41110, "fg": 42070,
    "label": "bold-marsh", "session_id": "session:01a184b7-a108-77d0-94a7-3f8748bee391",
-   "window_id": "window:01a184d4-c41b-7f26-9721-24f8f4cf8ce3"}
+   "window_id": "window:01a184d4-c41b-7f26-9721-24f8f4cf8ce3", "cwd": "/Users/me/code/app"}
 ]`
 
 func TestParseRexPoll(t *testing.T) {
@@ -175,6 +175,7 @@ func TestParseRexPoll(t *testing.T) {
 		},
 		FG:    42070,
 		Child: 41110,
+		CWD:   "/Users/me/code/app",
 	}
 	if blocks[2] != want {
 		t.Errorf("block = %+v, want %+v", blocks[2], want)
@@ -585,11 +586,7 @@ func TestClickWithNothingToRunOnlySelects(t *testing.T) {
 }
 
 func TestDefaultRexEnter(t *testing.T) {
-	var cfg Config
-	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
-		t.Fatal(err)
-	}
-	tmpl := cfg.Rex.Enter
+	tmpl := defaultRexConfig(t).Rex.Enter
 	for _, want := range []string{"{rex} --autostart=false focus", "session.select", "{rex-session}", "{rex-window}", "{rex-block}", `open -a "Rex Beta"`} {
 		if !strings.Contains(tmpl, want) {
 			t.Errorf("[rex] enter should contain %s, got %q", want, tmpl)
@@ -606,10 +603,7 @@ func TestDefaultRexEnter(t *testing.T) {
 // osascript and open, and returns the calls they logged, one per line.
 func runDefaultRexEnter(t *testing.T, termProgram string, rexFails bool) ([]string, error) {
 	t.Helper()
-	var cfg Config
-	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
-		t.Fatal(err)
-	}
+	cfg := defaultRexConfig(t)
 	dir := t.TempDir()
 	calls := filepath.Join(dir, "calls")
 	exit := "0"
@@ -724,5 +718,365 @@ func TestPollRexLive(t *testing.T) {
 			!strings.HasPrefix(b.WindowID, "window:") {
 			t.Errorf("block ids look wrong: %+v", b)
 		}
+	}
+}
+
+// gitRepo makes a repo at root/name with a linked worktree at root/name.wt.
+// It returns the main and worktree dirs.
+func gitRepo(t *testing.T, root, name string) (string, string) {
+	t.Helper()
+	main, wt := filepath.Join(root, name), filepath.Join(root, name+".wt")
+	admin := filepath.Join(main, ".git", "worktrees", "wt")
+	for _, d := range []string{admin, filepath.Join(main, "sub"), wt} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, body := range map[string]string{
+		filepath.Join(wt, ".git"):         "gitdir: " + admin + "\n",
+		filepath.Join(admin, "commondir"): "../..\n",
+	} {
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return main, wt
+}
+
+func TestRepoName(t *testing.T) {
+	root := t.TempDir()
+	main, wt := gitRepo(t, root, "app")
+	plain := filepath.Join(root, "notes")
+	for dir, want := range map[string]string{
+		main:                       "app",
+		filepath.Join(main, "sub"): "app",
+		wt:                         "app",
+		plain:                      "notes",
+	} {
+		if got := repoName(dir); got != want {
+			t.Errorf("repoName(%s) = %q, want %q", dir, got, want)
+		}
+	}
+}
+
+// cwdBlock is a block of Rex session sid with cwd.
+func cwdBlock(sid, cwd string) rexBlock {
+	return rexBlock{RexTarget: RexTarget{SessionID: sid, BlockID: "block:" + sid}, CWD: cwd}
+}
+
+func TestRexRepoSession(t *testing.T) {
+	root := t.TempDir()
+	main, wt := gitRepo(t, root, "app")
+	other, _ := gitRepo(t, root, "other")
+	plain := filepath.Join(root, "notes")
+	blocks := []rexBlock{
+		cwdBlock("session:none", ""),
+		cwdBlock("session:other", other),
+		cwdBlock("session:sub", filepath.Join(main, "sub")),
+		cwdBlock("session:wt", wt),
+		cwdBlock("session:plain", plain),
+	}
+	for _, tc := range []struct{ name, dir, want string }{
+		{"its own dir wins", wt, "session:wt"},
+		{"else the first block in the repo", main, "session:sub"},
+		{"a trailing slash is the same dir", wt + "/", "session:wt"},
+		{"outside a repo, the same dir", plain, "session:plain"},
+		{"outside a repo, nothing else", root, ""},
+	} {
+		if got := rexRepoSession(blocks, tc.dir); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	if got := rexRepoSession(nil, main); got != "" {
+		t.Errorf("no blocks: got %q, want none", got)
+	}
+}
+
+// offlineRow is an offline claude session in dir.
+func offlineRow(dir string) Session {
+	return Session{ID: "o", Source: "claude", Title: "offline", CWD: dir, Modified: time.Now()}
+}
+
+func TestEnterOnAnOfflineClaudeRowRunsRexResumeDetached(t *testing.T) {
+	m, out := enterModel(t, offlineRow("/p"))
+	m.bgExec = false // [rex] resume only drives the app: never a takeover
+	m.rexResume = "printf 'resume %s' {id} > " + shellQuote(out)
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := detachedOutput(t, cmd, out); got != "resume o" {
+		t.Errorf("Enter ran %q, want [rex] resume", got)
+	}
+}
+
+func TestRexResumeIsClaudeOnly(t *testing.T) {
+	m, _ := enterModel(t, offlineRow("/p"))
+	m.rexResume = "resume"
+	for _, source := range []string{"pi", "copilot"} {
+		s := offlineRow("/p")
+		s.Source = source
+		if got := m.rexEnterFor(s); got != "" {
+			t.Errorf("%s: Enter runs %q, want its own enter", source, got)
+		}
+	}
+}
+
+func TestEnterKeepsTheEnterCommandWhenRexResumeDoesNotApply(t *testing.T) {
+	for name, tc := range map[string]struct {
+		s      Session
+		rexBin string
+		resume string
+	}{
+		"a live tmux row": {Session{ID: "t", Source: "claude", PID: 1, Pane: "%1", Modified: time.Now()}, "/opt/rex", "exit 1"},
+		"no Rex mode":     {offlineRow("/p"), "", "exit 1"},
+		"no [rex] resume": {offlineRow("/p"), "/opt/rex", ""},
+	} {
+		m, out := enterModel(t, tc.s)
+		m.rexBin = tc.rexBin
+		m.rexResume = tc.resume
+		_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		if got := detachedOutput(t, cmd, out); got != "enter" {
+			t.Errorf("%s: Enter ran %q, want the enter command", name, got)
+		}
+	}
+}
+
+func TestDoubleClickOnAnOfflineClaudeRowRunsRexResume(t *testing.T) {
+	m, out := enterModel(t, offlineRow("/p"))
+	m.rexResume = "printf resume > " + shellQuote(out)
+	m.commands = nil
+	m.switchOnClick = true
+	m.width, m.height = 120, 10
+	_, cmd := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 1})
+	if got := detachedOutput(t, cmd, out); got != "resume" {
+		t.Errorf("a click ran %q, want [rex] resume", got)
+	}
+}
+
+// repoModel is a Rex-mode model whose poll finds blocks and counts calls.
+func repoModel(t *testing.T, polls *int, s Session, blocks ...rexBlock) (model, string) {
+	t.Helper()
+	m, out := enterModel(t, s)
+	m.rexPoll = func() []rexBlock {
+		*polls++
+		return blocks
+	}
+	return m, out
+}
+
+func TestRexResumeFindsTheRowsRepoSession(t *testing.T) {
+	main, wt := gitRepo(t, t.TempDir(), "app")
+	var polls int
+	m, out := repoModel(t, &polls, offlineRow(wt), cwdBlock("session:app", main))
+	m.rexResume = "printf '%s %s' {rex-repo-session?} {repo-name} > " + shellQuote(out)
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if polls != 0 {
+		t.Error("the poll should run in the command, not in Update")
+	}
+	if got := detachedOutput(t, cmd, out); got != "session:app app" {
+		t.Errorf("got %q, want the repo's Rex session and name", got)
+	}
+}
+
+func TestRexRepoSessionEmptyWhenNoneMatches(t *testing.T) {
+	_, wt := gitRepo(t, t.TempDir(), "app")
+	var polls int
+	m, out := repoModel(t, &polls, offlineRow(wt), cwdBlock("session:elsewhere", "/"))
+	m.rexResume = "printf '[%s]' {rex-repo-session?} > " + shellQuote(out)
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := detachedOutput(t, cmd, out); got != "[]" {
+		t.Errorf("got %q, want an empty session", got)
+	}
+}
+
+func TestRepoPlaceholdersWithoutRexMode(t *testing.T) {
+	main, _ := gitRepo(t, t.TempDir(), "app")
+	m, out := enterModel(t, offlineRow(main))
+	m.rexBin = ""
+	m.commands = map[string]string{"x": "printf '[%s] %s' {rex-repo-session?} {repo-name} > " + shellQuote(out)}
+	_, cmd := m.Update(key("x"))
+	if got := detachedOutput(t, cmd, out); got != "[] app" {
+		t.Errorf("got %q, want no session and the repo name", got)
+	}
+}
+
+func TestRexNewKeyUsesThePickedProjectsRepo(t *testing.T) {
+	root := t.TempDir()
+	app, _ := gitRepo(t, root, "app")
+	other, _ := gitRepo(t, root, "other")
+	var polls int
+	m, out := repoModel(t, &polls, offlineRow(app),
+		cwdBlock("session:app", app), cwdBlock("session:other", other))
+	m.all = []Session{offlineRow(other)}
+	m.bgExec = false // [rex] new only drives the app: never a takeover
+	m.rexNew = "printf '%s %s %s' {rex-repo-session?} {repo-name} {project-picker} > " + shellQuote(out)
+	m.rexNewKey = "c"
+	m.commands["c"] = "printf tmux > " + shellQuote(out)
+	mm, _ := m.Update(key("c"))
+	if !mm.(model).picker.active {
+		t.Fatal("c should open the project picker")
+	}
+	_, cmd := mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := detachedOutput(t, cmd, out); got != "session:other other "+other {
+		t.Errorf("got %q, want the picked project's repo", got)
+	}
+}
+
+func TestRexNewKeyNeedsRexMode(t *testing.T) {
+	m, out := enterModel(t, offlineRow("/p"))
+	m.rexBin = ""
+	m.rexNew = "printf rex > " + shellQuote(out)
+	m.rexNewKey = "c"
+	m.commands["c"] = "printf commands > " + shellQuote(out)
+	_, cmd := m.Update(key("c"))
+	if got := detachedOutput(t, cmd, out); got != "commands" {
+		t.Errorf("c ran %q, want the [commands] binding", got)
+	}
+}
+
+// runDefaultRexTab runs a shipped [rex] template with a fake rex that logs
+// its calls and prints the JSON real rex prints. It returns the calls.
+func runDefaultRexTab(t *testing.T, tmpl string, vars map[string]string) []string {
+	t.Helper()
+	dir := t.TempDir()
+	calls := filepath.Join(dir, "calls")
+	rex := `shift; echo "rex $*" >> "$CALLS"
+case "$1" in
+new) echo '{"session_id": "session:n", "initial_windows": [{"window_id": "window:n", "block_ids": ["block:n"]}]}' ;;
+window) echo '{"window_id": "window:t", "block_ids": ["block:t"], "revision": 2}' ;;
+esac`
+	for name, body := range map[string]string{
+		"rex":  rex,
+		"open": `echo "open $*" >> "$CALLS"`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("CALLS", calls)
+	t.Setenv("PATH", dir+":/usr/bin:/bin")
+	t.Setenv("TERM_PROGRAM", "rex")
+	vars["rex"] = filepath.Join(dir, "rex")
+	if err := execCmd(tmpl, vars, true)().(execDoneMsg).err; err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(calls)
+	return strings.Split(strings.TrimSpace(string(data)), "\n")
+}
+
+func defaultRexConfig(t *testing.T) Config {
+	t.Helper()
+	var cfg Config
+	if _, err := toml.Decode(defaultConfigTOML, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+func TestDefaultRexResumeOpensATabInTheRepoSession(t *testing.T) {
+	vars := commandVars(offlineRow("/p/app"))
+	vars["repo-name"], vars["rex-repo-session?"] = "app", "session:app"
+	calls := runDefaultRexTab(t, defaultRexConfig(t).Rex.Resume, vars)
+	want := []string{
+		"rex window new -s session:app -c /p/app --json",
+		"rex send -s session:app -b block:t claude --resume 'o'",
+		"rex send-key -s session:app -b block:t enter",
+		"rex do session.select session_id=session:app window_id=window:t",
+		"open -a Rex Beta",
+	}
+	if !slices.Equal(calls, want) {
+		t.Errorf("calls = %q\nwant  %q", calls, want)
+	}
+}
+
+func TestDefaultRexResumeStartsASessionForANewRepo(t *testing.T) {
+	vars := commandVars(offlineRow("/p/app"))
+	vars["repo-name"], vars["rex-repo-session?"] = "app", ""
+	calls := runDefaultRexTab(t, defaultRexConfig(t).Rex.Resume, vars)
+	want := []string{
+		"rex new app -c /p/app --json",
+		"rex send -s session:n -b block:n claude --resume 'o'",
+		"rex send-key -s session:n -b block:n enter",
+		"rex do session.select session_id=session:n window_id=window:n",
+		"open -a Rex Beta",
+	}
+	if !slices.Equal(calls, want) {
+		t.Errorf("calls = %q\nwant  %q", calls, want)
+	}
+}
+
+func TestDefaultRexNew(t *testing.T) {
+	cfg := defaultRexConfig(t)
+	if cfg.Rex.NewKey != "c" {
+		t.Errorf("new_key = %q, want c", cfg.Rex.NewKey)
+	}
+	vars := commandVars(offlineRow("/p/row"))
+	vars["repo-name"], vars["rex-repo-session?"] = "app", "session:app"
+	vars["project-picker"], vars["text-input"] = "/p/app", "fix it"
+	tmpl := textInputRe.ReplaceAllString(cfg.Rex.New, "{text-input}")
+	calls := runDefaultRexTab(t, tmpl, vars)
+	want := []string{
+		"rex window new -s session:app -c /p/app --json",
+		"rex send -s session:app -b block:t claude 'fix it'",
+		"rex send-key -s session:app -b block:t enter",
+		"rex do session.select session_id=session:app window_id=window:t",
+		"open -a Rex Beta",
+	}
+	if !slices.Equal(calls, want) {
+		t.Errorf("calls = %q\nwant  %q", calls, want)
+	}
+}
+
+func TestDefaultRexNewTypesThePromptAsText(t *testing.T) {
+	vars := commandVars(offlineRow("/p/row"))
+	vars["repo-name"], vars["rex-repo-session?"] = "app", "session:app"
+	vars["project-picker"], vars["text-input"] = "/p/app", "it's `date` $HOME"
+	tmpl := textInputRe.ReplaceAllString(defaultRexConfig(t).Rex.New, "{text-input}")
+	calls := runDefaultRexTab(t, tmpl, vars)
+	if want := `rex send -s session:app -b block:t claude 'it'\''s ` + "`date`" + ` $HOME'`; calls[1] != want {
+		t.Errorf("sent %q\nwant %q", calls[1], want)
+	}
+}
+
+func TestDefaultRexResumeNeedsJq(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Symlink("/bin/sh", filepath.Join(dir, "sh")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir) // sh, but no jq
+	vars := commandVars(offlineRow("/p/app"))
+	vars["repo-name"], vars["rex-repo-session?"], vars["rex"] = "app", "", filepath.Join(dir, "rex")
+	err := execCmd(defaultRexConfig(t).Rex.Resume, vars, true)().(execDoneMsg).err
+	if err == nil || !strings.Contains(err.Error(), "jq not found") {
+		t.Errorf("err = %v, want jq not found", err)
+	}
+}
+
+func TestRexResumeRefusesARowWithNoCwd(t *testing.T) {
+	m, _ := enterModel(t, offlineRow(""))
+	m.rexResume = "echo {repo-name}"
+	after, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Error("a row with no cwd should run nothing")
+	}
+	if got := after.(model).notice; !strings.Contains(got, "working directory") {
+		t.Errorf("notice = %q, want a working directory notice", got)
+	}
+}
+
+func TestHelpHidesTheCommandRexNewReplaces(t *testing.T) {
+	m, _ := enterModel(t, offlineRow("/p"))
+	m.rexNew, m.rexNewKey = "rex new", "c"
+	m.commands["c"] = "tmux new-window"
+	m.width, m.height = 120, 200
+	m.showHelp = true
+	out := m.View()
+	if strings.Contains(out, "tmux new-window") {
+		t.Error("help lists the [commands] c that [rex] new replaces")
+	}
+	if !strings.Contains(out, "new agent in a Rex tab") {
+		t.Error("help should name [rex] new")
+	}
+	m.rexBin = ""
+	if !strings.Contains(m.View(), "tmux new-window") {
+		t.Error("without Rex mode help should list [commands] c")
 	}
 }
